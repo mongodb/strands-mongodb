@@ -1,0 +1,193 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "strands-mongodb"
+dynamic = ["version"]
+description = "MongoDB storage and memory backends for the Strands Agents SDK"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "MongoDB, Inc." }]
+keywords = [
+    "strands",
+    "strands-agents",
+    "mongodb",
+    "atlas",
+    "vector-search",
+    "storage",
+    "memory",
+    "agent",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Typing :: Typed",
+]
+
+# Intentionally empty. Every runtime dependency belongs to the extra that needs it, so
+# `pip install strands-mongodb[storage]` never pulls vector-search machinery. A bare
+# `pip install strands-mongodb` is metadata only and imports of the backends fail with an
+# actionable message (see src/strands_mongodb/_extras.py).
+dependencies = []
+
+[project.optional-dependencies]
+# Floor rationale: strands-agents 1.48.0 is the first release that ships `strands.storage`
+# (the unified Storage protocol) and `StorageError`; below it, importing this package's
+# storage backend fails. Verified by inspecting the wheel contents of every strands-agents
+# release. `strands.memory` landed earlier, in 1.44.0 — a single shared floor is used so the
+# extras stay mutually consistent and `[all]` cannot resolve to a split pair.
+# Upper bounds are deliberately omitted, matching strands-dynamodb-storage and the official
+# extension template.
+#
+# `typing-extensions` is named rather than inherited. `types.py` imports `Required` and
+# `TypedDict` from it directly, since `typing.Required` is 3.11+ and the floor here is 3.10.
+# strands-agents already pins it unconditionally, so this changes no resolution today; the
+# floor matches theirs. A dependency we import is one we declare, because a transitive pin
+# is a fact about their current release rather than a promise to us.
+storage = [
+    "strands-agents>=1.48.0",
+    "pymongo>=4.12.0",
+    "typing-extensions>=4.13.2",
+]
+memory = [
+    "strands-agents>=1.48.0",
+    "pymongo>=4.12.0",
+    "typing-extensions>=4.13.2",
+    # Atlas $vectorSearch / $search stage builders, maintained by MongoDB.
+    # 0.3.0 itself requires pymongo>=4.12.0, which sets the floor above.
+    "pymongo-search-utils>=0.3.0",
+]
+all = ["strands-mongodb[memory,storage]"]
+dev = [
+    "pytest>=8.0.0,<9.0.0",
+    "pytest-asyncio>=0.25.0,<1.0.0",
+    # The 90% aggregate floor is a release gate (§10.6, DoD 13). A gate no installed tool can
+    # measure is not a gate, and the scaffold declared the floor without declaring this.
+    "pytest-cov>=5.0.0,<8.0.0",
+    "ruff>=0.11.0,<1.0.0",
+    "mypy>=1.15.0,<2.0.0",
+]
+
+# TODO(PKG-2): confirm the GitHub org before the first upload to PyPI. These URLs are
+# published in the package metadata and must resolve.
+[project.urls]
+Homepage = "https://github.com/mongodb-labs/strands-mongodb"
+Repository = "https://github.com/mongodb-labs/strands-mongodb"
+Issues = "https://github.com/mongodb-labs/strands-mongodb/issues"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+# The git repo root is one level up: this is a monorepo whose `python/` directory is a
+# sibling of a future `typescript/`.
+root = ".."
+# Release tags are `python-v0.1.0`, so the python and typescript artifacts version
+# independently off the same repo.
+tag_regex = "^python-v(?P<version>.+)$"
+# setuptools-scm refuses a non-default `root` without a reference file; pyproject.toml is
+# always next to itself.
+relative_to = "pyproject.toml"
+# Only reached when building from a source tree with no git metadata (e.g. a zip download).
+# Deliberately unmistakable so such a build is never mistaken for a release.
+fallback_version = "0.0.0"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/strands_mongodb"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "README.md", "LICENSE", "NOTICE", "pyproject.toml"]
+
+[tool.hatch.envs.default]
+features = ["all"]
+dependencies = [
+    "pytest>=8.0.0,<9.0.0",
+    "pytest-asyncio>=0.25.0,<1.0.0",
+    "pytest-cov>=5.0.0,<8.0.0",
+    "ruff>=0.11.0,<1.0.0",
+    "mypy>=1.15.0,<2.0.0",
+]
+
+[tool.hatch.envs.default.scripts]
+test = "pytest {args}"
+# No path arguments: an explicit path overrides `tool.ruff.include`, and the two drifted apart once
+# `scripts/` was added to one and not the other. One list, in `[tool.ruff]`, is the fix.
+lint = "ruff check"
+format = "ruff format"
+format-check = "ruff format --check"
+typecheck = "mypy"
+# The coverage floors are deliberately not part of `test`. `test` must stay runnable at any point
+# mid-task, and a floor that fails on a half-finished module trains everyone to pass --no-cov.
+# `cov` is the release gate, run in CI and at the end of a phase.
+cov = [
+    "pytest --cov=strands_mongodb --cov-report=term-missing --cov-report=json --cov-fail-under=90 {args}",
+    "python scripts/check_module_coverage.py",
+]
+prepare = ["format", "lint", "typecheck", "test"]
+
+[tool.ruff]
+line-length = 120
+# scripts/ is included because check_module_coverage.py gates a release. A release gate that ruff
+# never sees is a release gate nobody maintains.
+include = ["src/**/*.py", "tests/**/*.py", "scripts/**/*.py"]
+
+[tool.ruff.lint]
+select = [
+    "E", # pycodestyle
+    "F", # pyflakes
+    "I", # isort
+    "B", # flake8-bugbear
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+# Tests are checked too. An unawaited coroutine or a fixture returning the wrong type is how a test
+# passes while asserting nothing, and `mypy src` alone never sees it. `scripts/` gates a release.
+files = ["src", "tests", "scripts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+# Set explicitly rather than left to the default, which pytest-asyncio warns is changing. Function
+# scope is what the fixtures assume: each test gets its own client on its own loop, so the harness
+# never depends on the loop-rebinding behavior that REQ-E-017 exists to provide.
+asyncio_default_fixture_loop_scope = "function"
+# A typo in a marker name silently produces a test that never runs under its tier and always runs
+# under none. Strict mode turns that into a collection error.
+addopts = "--strict-markers --strict-config"
+markers = [
+    "contract: needs a real MongoDB deployment of any kind. Gated on MONGODB_URI.",
+    "integration: needs Atlas or an Atlas CLI local deployment with mongot. Gated on MONGODB_ATLAS_URI.",
+    "autoembed: needs a cluster with a registered Atlas embedding model. Gated on MONGODB_AUTOEMBED_URI.",
+    "compat: resolves the latest published strands-agents rather than the pinned one. CI cron only.",
+]
+
+[tool.coverage.run]
+source = ["strands_mongodb"]
+branch = true
+# Several tests assert on import-time behavior, which can only be observed in a fresh interpreter.
+# Without parallel mode their subprocesses are unmeasured, so the lines they exercise read as
+# uncovered and the per-module floor would fail on code that is in fact tested. pytest-cov sets
+# COVERAGE_PROCESS_START for child processes once this is on, and combines the data files after.
+parallel = true
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+]
+show_missing = true
