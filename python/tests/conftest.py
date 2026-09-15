@@ -13,23 +13,41 @@ Marker           Environment variable       Backend
 ``autoembed``    ``MONGODB_AUTOEMBED_URI``  a cluster with a registered embedding model
 ===============  =========================  ==============================================
 
+Those three variables are read from the environment, and any the environment lacks are filled from a
+``.env`` file at ``python/.env`` or the repository root (``design-delta.md`` §5.7). Nothing else in that
+file is read, an existing value is never replaced, and an empty value means "no backend for this tier",
+which is how a run opts out of a configured deployment without editing anything.
+
 ``autoembed`` exists as a separate gate rather than as part of ``integration`` because an Atlas CLI
 local deployment runs vector and full-text search but registers no embedding models, so
 ``$vectorSearch`` with ``autoEmbed`` cannot be exercised there. Folding it into ``integration``
 would report the package's default search mode as covered when it was never run.
+
+**A ``contract`` test may not run a query, and this is enforced by nothing but review.** "Any real
+MongoDB" is meant literally: measured against ``mongo:8``, reported version 8.3.8 with
+``modules: []``, ``$search``, ``$vectorSearch``, ``$listSearchIndexes``, ``list_search_indexes()`` and
+``create_search_index`` all return ``OperationFailure`` code 31082, while ordinary index creation and
+every CRUD path work normally. Three more deployments were measured in Task 19 and all three refuse the
+same five calls, with a different code: ``mongo:6``, ``mongo:7`` and an enterprise ``mongod`` 7.0.12.
+``REQ-E-053a`` has the table, and the tier boundary is the same on all four. So the contract tier covers
+writes, ordinary indexes and the dedup constraint; anything needing mongot belongs in ``integration``.
+Task 8 pointed ``MONGODB_URI``
+at a plain deployment for the first time and found one class relying on the wider gate
+(``AT-072b``, re-marked), which is the mistake this paragraph exists to prevent repeating.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+import re
 import subprocess
 import sys
 import textwrap
 import uuid
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, MutableMapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import pytest
 
@@ -48,6 +66,82 @@ TIER_VARIABLES: dict[str, str] = {
     "autoembed": "MONGODB_AUTOEMBED_URI",
 }
 
+# Where a developer's connection strings may already be written down. `python/.env` first, because
+# the nearer file is the one someone working inside this directory would create, then the repository
+# root, which is where the file actually appeared. Both are `.gitignore`d, and `test_tier_gating`
+# asserts that rather than trusting it: this file holds a live Atlas password.
+ENV_FILE_LOCATIONS: tuple[Path, ...] = (_PROJECT_ROOT / ".env", _PROJECT_ROOT.parent / ".env")
+
+
+def parse_env_file(text: str) -> dict[str, str]:
+    """Read ``KEY=VALUE`` lines, with no interpolation and no shell semantics.
+
+    The value is everything after the *first* ``=``, because a connection string carries ``=`` in its
+    query string and splitting on every one of them truncates the URI. One layer of matching quotes is
+    stripped; nothing is unescaped, since ``%40`` in a generated Atlas password is part of the value the
+    driver expects to receive.
+
+    Args:
+        text: Contents of a ``.env`` file.
+
+    Returns:
+        Every well-formed assignment in the file, later lines winning over earlier ones. Blank lines,
+        ``#`` comments and lines with no ``=`` are skipped, which is what makes a commented-out URI
+        stay commented out.
+    """
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        name, _, value = stripped.partition("=")
+        value = value.strip()
+        if len(value) > 1 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        values[name.strip()] = value
+    return values
+
+
+def fill_tier_variables_from_env(
+    environ: MutableMapping[str, str], locations: Iterable[Path] = ENV_FILE_LOCATIONS
+) -> list[str]:
+    """Fill the three tier variables from the first ``.env`` that exists, without overriding anything.
+
+    Only ``TIER_VARIABLES``' own names are read. Every other key in the file is ignored, which is the
+    difference between reading configuration and importing an environment: a ``.env`` written for an
+    application can carry ``PATH`` or a cloud credential, and a harness that assimilates all of it
+    changes how the interpreter resolves programs for the rest of the session.
+
+    A key already **present** in ``environ`` is left alone, and presence rather than truthiness is the
+    test on purpose. The gate reads an empty value as unset, so ``MONGODB_URI= pytest`` stays the way to
+    run a tier unbacked on a machine whose ``.env`` configures it.
+
+    Args:
+        environ: Mapping to fill, ``os.environ`` in the one call that matters.
+        locations: Candidate paths, in preference order. The first that exists is the only one read,
+            since two files are a mistake to notice rather than a merge to perform.
+
+    Returns:
+        The variables this call set, in file order. Empty when no file exists, which is the normal case
+        in CI and not a condition worth reporting.
+    """
+    wanted = set(TIER_VARIABLES.values())
+    for path in locations:
+        if not path.is_file():
+            continue
+        filled = []
+        for name, value in parse_env_file(path.read_text()).items():
+            if name in wanted and name not in environ:
+                environ[name] = value
+                filled.append(name)
+        return filled
+    return []
+
+
+# At import time, so the collection hook and every fixture below see the same environment. `design-delta.md`
+# §5.7 records why this is three keys of hand-written parsing rather than a dependency on `python-dotenv`.
+fill_tier_variables_from_env(os.environ)
+
 # One database per test session, dropped on teardown. Concurrent sessions (a local run beside CI,
 # or pytest-xdist workers) must not share a namespace, and a fixed name makes that collision
 # invisible: the second session sees the first session's documents and passes for the wrong reason.
@@ -55,7 +149,7 @@ _SESSION_SUFFIX = uuid.uuid4().hex[:8]
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Make the subprocess tests count toward coverage.
+    """Register the §10.3 checklist gate, and make the subprocess tests count toward coverage.
 
     Several tests assert on import-time behavior, which is only observable in a fresh interpreter,
     so they run their assertions in a child process. Nothing a child executes is measured unless
@@ -71,11 +165,168 @@ def pytest_configure(config: pytest.Config) -> None:
     Only set when coverage is actually collecting. Otherwise a plain ``pytest`` run would leave
     ``.coverage.*`` data files behind from every subprocess it starts.
 
+    The gate is registered as a plugin instance rather than written as module-level hooks; see
+    :class:`ChecklistGate` for why.
+
     Args:
         config: The active pytest configuration.
     """
     if getattr(config.option, "cov_source", None):
         os.environ["COVERAGE_PROCESS_START"] = str(_PROJECT_ROOT / "pyproject.toml")
+    config.pluginmanager.register(ChecklistGate(), ChecklistGate.name)
+
+
+# Acceptance-test ids as this suite writes them: ``AT-021``, ``AT-032a``, ``CH-001``, ``MP-001``. The
+# gate's ``AT-GATE`` deliberately does not match, so the gate cannot end up listed as its own evidence.
+_AT_ID = re.compile(r"\b((?:AT|CH|MP)-[0-9]{1,3}[a-z]*)")
+
+
+class RunOutcome(NamedTuple):
+    """What one test did in this session.
+
+    Attributes:
+        outcome: ``passed``, ``failed`` or ``skipped``, as pytest reported it.
+        detail: The skip reason or the phase that failed, so the gate's message can carry it.
+    """
+
+    outcome: str
+    detail: str
+
+
+def _declared_ids(item: pytest.Item) -> tuple[set[str], set[str]]:
+    """Return the acceptance-test ids declared on a collected test, and those on its class.
+
+    Both are load-bearing in this suite. Some ids sit on a test, some on the class holding a group of
+    them, and a few on both.
+
+    Only each docstring's **first paragraph** is read, and that is not a stylistic preference. This suite
+    declares coverage in the summary line, then discusses other tiers in the body: the two unit classes
+    in ``test_memory_store.py`` covering the metadata merge both name ``AT-040`` several paragraphs down,
+    to say that the assertion lives on the integration tier and not in them. Reading whole docstrings
+    turns that sentence into a coverage claim, and the gate then reports the item as covered by tests
+    which say in writing that they do not cover it. Measured: it passed a run where the integration tier
+    was deselected.
+
+    Module docstrings are not read at all, for the same reason one step further out.
+
+    Reading collected items rather than parsing the files is what keeps a fake's ids out of the index.
+    ``FakeAggregationCursor`` carries ``AT-032b`` in its docstring and is never collected, so it cannot
+    satisfy a checklist item on its own.
+
+    Args:
+        item: A collected test.
+
+    Returns:
+        A pair of id sets, the test's own first and its class's second. Either may be empty.
+    """
+    owner = getattr(item, "cls", None)
+    function = getattr(item, "obj", None)
+    own = set(_AT_ID.findall(_summary(getattr(function, "__doc__", ""))))
+    inherited = set(_AT_ID.findall(_summary(getattr(owner, "__doc__", ""))))
+    return own, inherited
+
+
+def _summary(docstring: str | None) -> str:
+    """Return a docstring's first paragraph, where this suite declares what a test covers.
+
+    Args:
+        docstring: A docstring, or ``None`` for a test or class that has none.
+
+    Returns:
+        Everything up to the first blank line, or an empty string.
+    """
+    return (docstring or "").split("\n\n", 1)[0]
+
+
+class ChecklistGate:
+    """Collects the two things the plan §10.3 release gate needs and a test cannot see by itself.
+
+    A test can assert what it observes. It cannot observe which other tests were collected, nor what
+    they did, and the gate's whole claim is about the run around it: that every checklist item has a
+    test, and that the release-gate subset ran and passed rather than quietly skipping. Both facts live
+    in pytest hooks, so they are gathered here and read through fixtures.
+
+    Registered from :func:`pytest_configure` rather than by defining the hooks at module level, for two
+    reasons. ``pytest_collection_modifyitems`` may only be defined once per module and this conftest
+    already uses it for tier gating, and ``test_tier_gating.py`` re-exports that gating hook into a
+    nested session, which must not inherit the gate's reordering.
+    """
+
+    name = "strands_mongodb_checklist_gate"
+
+    def __init__(self) -> None:
+        self.by_id: dict[str, tuple[str, ...]] = {}
+        self.outcomes: dict[str, RunOutcome] = {}
+
+    @pytest.hookimpl(trylast=True)
+    def pytest_collection_modifyitems(self, items: list[pytest.Item]) -> None:
+        """Index the collected tests by acceptance-test id, then force the gate to run last.
+
+        An id declared by a test wins over the same id on any class, anywhere. A class docstring only
+        carries the ids no test declares for itself, which is how a class covering one behaviour across
+        several tests is meant to read. That precedence was measured rather than assumed: without it, an
+        injected failure in the contract ``read`` test was blamed on three checklist items about ``write``
+        and ``list`` ordering, because the contract class in ``test_storage.py`` declares ``AT-020`` and
+        ``AT-027`` in the same summary line as ``AT-021``.
+
+        ``trylast`` is what makes the reordering survive a plugin that shuffles collection order.
+        Nothing in the current pinned set does, and the gate is worthless the moment something does:
+        run before the tests it measures, it would report every one of them as never having run.
+        """
+        own: dict[str, list[str]] = {}
+        inherited: dict[str, list[str]] = {}
+        for item in items:
+            declared, from_class = _declared_ids(item)
+            for identifier in declared:
+                own.setdefault(identifier, []).append(item.nodeid)
+            for identifier in from_class:
+                inherited.setdefault(identifier, []).append(item.nodeid)
+        self.by_id = {
+            identifier: tuple(own.get(identifier) or inherited.get(identifier) or ())
+            for identifier in set(own) | set(inherited)
+        }
+
+        gate = [item for item in items if item.get_closest_marker("gate") is not None]
+        if gate:
+            items[:] = [item for item in items if item.get_closest_marker("gate") is None] + gate
+
+    def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
+        """Record one outcome per node id, across the three phases of a test.
+
+        A test that skips in setup never reaches its call phase, and a test that passes its call phase
+        can still fail in teardown, so neither phase alone is the result. A recorded failure is never
+        overwritten by a later phase's success.
+        """
+        if report.when == "setup" and report.passed:
+            return
+        if report.when == "teardown" and not report.failed:
+            return
+        if self.outcomes.get(report.nodeid, RunOutcome("", "")).outcome == "failed":
+            return
+        if report.skipped and isinstance(report.longrepr, tuple):
+            detail = str(report.longrepr[2])
+        elif report.failed:
+            detail = f"{report.when} failed"
+        else:
+            detail = ""
+        self.outcomes[report.nodeid] = RunOutcome(report.outcome, detail)
+
+
+@pytest.fixture(scope="session")
+def checklist_gate(request: pytest.FixtureRequest) -> ChecklistGate:
+    """The registered :class:`ChecklistGate`, holding this run's id index and outcomes.
+
+    Returns:
+        The plugin instance :func:`pytest_configure` registered.
+
+    Raises:
+        pytest.fail.Exception: If the plugin is not registered, which means the gate is measuring a
+            session it was never installed in, and a green result would mean nothing.
+    """
+    plugin = request.config.pluginmanager.get_plugin(ChecklistGate.name)
+    if not isinstance(plugin, ChecklistGate):
+        pytest.fail(f"the {ChecklistGate.name} plugin is not registered; the checklist gate cannot see this run")
+    return plugin
 
 
 def _run_mypy(
@@ -222,14 +473,39 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 break
 
 
-def _require(variable: str) -> str:
+_CREDENTIAL = re.compile(r"://[^@/]+@")
+"""The userinfo component of a connection string, which is what must not be printed."""
+
+
+class RedactedURI(str):
+    """A connection string whose ``repr`` hides its password (``REQ-E-103``).
+
+    A ``str`` subclass rather than a wrapper, because everything downstream is entitled to treat this as
+    the string it is: pymongo builds a client from it, tests compare it, f-strings interpolate it.
+    Only ``repr`` changes, and only ``repr`` is what leaks. pytest prints every fixture a failing test
+    requested using ``repr``, so before this the failure header for any test holding a URI carried the
+    password into the run log, and premortem **P-3** is exactly that. Measured in the all-tiers run of
+    2026-09-02 on six failures.
+
+    ``__str__`` deliberately keeps the credential. Redacting it would swap a disclosure that shows up in
+    a log for a connection failure that shows up in production.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        """Return the value with its userinfo replaced, quoted as a ``repr`` is expected to be."""
+        return repr(_CREDENTIAL.sub("://<redacted>@", str(self)))
+
+
+def _require(variable: str) -> RedactedURI:
     """Read a gate variable that ``_tier_gate`` has already proven present.
 
     Args:
         variable: Name of the environment variable to read.
 
     Returns:
-        The variable's value.
+        The variable's value, wrapped so that no report prints its password.
 
     Raises:
         RuntimeError: If the variable is unset, which means a fixture was requested by a test
@@ -242,7 +518,7 @@ def _require(variable: str) -> str:
             f"{variable} is unset but a fixture requiring it was requested. Add the matching tier "
             f"marker to the test so it is gated instead of failing here."
         )
-    return value
+    return RedactedURI(value)
 
 
 @pytest.fixture(scope="session")
