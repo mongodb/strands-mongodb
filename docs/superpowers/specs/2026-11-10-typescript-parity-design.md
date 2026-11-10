@@ -1,6 +1,6 @@
 # TypeScript parity: design
 
-NODE-7997. Status: **draft for review**. Nothing is implemented.
+NODE-7997. Status: **approved**, 2026-11-10. Nothing is implemented yet.
 
 ## 1. Verdict
 
@@ -40,7 +40,7 @@ Both surfaces, storage and memory, ship in one plan, as agreed.
 | Search result | `{ key, score, data?: Uint8Array }` | `StorageSearchResult` with the same fields |
 | Pluggable search | `SearchStrategy<S, Q>` with `index?(storage, key, data)` and `search(storage, query)`. `S3VectorSearchStrategy` adds `remove(storage, key)`, which `S3Storage.delete` calls | `SearchStrategy` with `index` and `search` |
 | Embedder | `abstract class Embedder { embed(text): Promise<number[]> }`, from `./storage` | A protocol with async `embed` |
-| Key helpers | `normalizeKey`, `normalizePrefix`, `namespace`, `resolveNamespace`, and the `NAMESPACED` and `EPHEMERAL` symbols. Exported | `_normalize_key` and friends. Private |
+| Key helpers | `normalizeKey`, `normalizePrefix`, `namespace` and `resolveNamespace` in `storage/storage.js`. **Not exported** from any public subpath. The `NAMESPACED` marker is `Symbol.for('strands.storage.namespaced')`, so it is reachable through the global symbol registry. `resolveNamespace` returns a marked storage as-is, and otherwise calls its `namespace()` | `_normalize_key`, `_normalize_prefix` and `_NAMESPACED`. Private, and imported anyway by this package's `storage.py` |
 | Keyword tokenizer | `tokenize`, `STOP_WORDS` in `storage/search/keyword`. **Not re-exported** from `./storage/search` | `tokenize`, documented as compatible with the TS tokenizer |
 | Memory store | `interface MemoryStore extends MemoryStoreConfig` with `writable`, `search(query, options?)`, and optional `add?`, `addMessages?`, `initialize?` and `getTools?` | The same as a protocol |
 | Memory entry | `{ content, storeName?, metadata?: Record<string, JSONValue> }` | `MemoryEntry` |
@@ -74,7 +74,7 @@ Its `engines.node` is `>= 20.19.0`, below the SDK's floor, so the SDK sets the N
 | Python | TypeScript | Verdict and reason |
 |---|---|---|
 | `MongoDBStorage(config, /, *, collection, prefix, ttl_seconds, search_strategy)` | `new MongoDBStorage(config, { collection?, prefix?, ttlSeconds?, searchStrategy? })` | Faithful. Same split as `S3Storage(bucket, config?)`: the connection first, the per-instance options second |
-| `write`, `read`, `delete`, `list`, `search`, `namespace` | Same names, on `Uint8Array` | Faithful |
+| `write`, `read`, `delete`, `list`, `search`, `namespace` | Same names, on `Uint8Array`. `namespace()` returns a full `MongoDBStorage` marked with `Symbol.for('strands.storage.namespaced')`, as Python's sets `_NAMESPACED` | Faithful |
 | `delete_prefix(prefix) → int` | `deletePrefix(prefix): Promise<number>` | Faithful. Not in the TS `Storage` interface either |
 | `prefix` (read-only property) | `readonly prefix: string` | Faithful |
 | `ensure_indexes()` | `ensureIndexes(): Promise<void>` | Faithful |
@@ -197,16 +197,24 @@ stop-word list. Importing it by deep path would break on any SDK release, becaus
 A unit test runs `KeywordSearchStrategy` from `@strands-agents/sdk/storage/search` and `MongoDBStorage.search`
 over the same keys and asserts the same order. A drift in the SDK then fails a test rather than ranking differently.
 
-### 5.7 Key normalisation reuses the SDK's
+### 5.7 Key normalisation is reimplemented, and tested against the SDK
 
 The SDK's `normalizeKey` and `normalizePrefix` behave exactly as the Python package's rules do:
 - They reject a backslash, although the TS documentation omits this.
-- They collapse runs of `/` and strip the slashes at either end.
-- They reject an empty key and any `..` segment.
+- They collapse runs of `/` and strip the slashes at either end. `normalizePrefix` keeps one trailing slash.
+- They reject an empty key and any `..` segment, throwing `StorageError`.
 
-**Choice:** call the SDK's exported functions rather than copy them. The package adds only what the SDK
-does not do: the 1024-byte UTF-8 key limit, and the prefix join. A golden-vector test (§6) pins
-the combined behaviour, so an SDK change that moves a collision fails here first.
+Python imports the SDK's private normalisers. TypeScript cannot, because the `exports` map forbids the deep
+path, just as it does for the tokenizer.
+
+**Choice:** reimplement both in `src/keys.ts`. They are about twenty-five lines, copied with their error messages. Add the two
+things the SDK does not do: the 1024-byte UTF-8 key limit, and the prefix join.
+
+Two tests hold the copy to the original:
+- A unit test drives the SDK's own `InMemoryStorage`, which calls the real normalisers, and `MongoDBStorage`'s key function over the same inputs. It asserts the same keys and the same rejections. A drift in the SDK then fails a test under `compat`.
+- The golden-vector test (§6) pins the result against what Python produces.
+
+The namespaced marker is not imported either. It is `Symbol.for('strands.storage.namespaced')`, and `Symbol.for` returns the same symbol everywhere. A test asserts the SDK's `resolveNamespace` behaviour through `new Agent({ storage })`: memory keys land at the same depth as on `InMemoryStorage`.
 
 ### 5.8 Test ids live in test titles
 
@@ -298,7 +306,7 @@ Approaches considered:
 - `dependencies` is empty, matching the Python rule.
 - Three `peerDependencies`: `@strands-agents/sdk`, `mongodb` and `@opentelemetry/api`. The SDK already requires the last.
 
-The floors are not chosen by reading changelogs. The `Dependency floors` job (§9) installs the declared floors and runs the suite, the way Python's does. The first floors come from the lowest versions that pass, found during implementation. The SDK floor is at least the first release whose `./storage` export carries `normalizeKey` and `namespace`. The driver floor is at least the first that has `appendMetadata`.
+The floors are not chosen by reading changelogs. The `Dependency floors` job (§9) installs the declared floors and runs the suite, the way Python's does. The first floors come from the lowest versions that pass, found during implementation. The SDK floor is at least the first release that exports `Storage`, `StorageError`, `MemoryStore` and `./storage/search`'s `Embedder` and `KeywordSearchStrategy`. The driver floor is at least the first that has `appendMetadata`.
 
 **Engines:** `node >= 22.0.0`, which is the SDK's own floor.
 
@@ -325,7 +333,7 @@ typescript/
     index.ts              the public surface, an explicit export list
     types.ts              config, query and result types, and constants
     client.ts             the identity registry, attribution, close
-    keys.ts               the SDK normalisers, plus the byte limit and prefix join
+    keys.ts               copies of the SDK normalisers, the byte limit and the prefix join
     tokenize.ts           the keyword tokenizer (§5.6)
     filter.ts             filter validation: declared fields, no operator keys
     pipeline.ts           $vectorSearch, $search, autoEmbed, RRF fusion, score bounds
@@ -475,7 +483,7 @@ Each of those three Markdown files is in `ci-python.yml`'s `paths`, so the final
 
 | Risk | Mitigation |
 |---|---|
-| The TS SDK changes `normalizeKey` or the tokenizer in a minor release | The golden-vector and `KeywordSearchStrategy` comparison tests fail under `compat` before users see it |
+| The TS SDK changes its key normalisation or the tokenizer in a minor release | The `InMemoryStorage` and `KeywordSearchStrategy` comparison tests fail under `compat` before users see it |
 | The Python index commands change and the TS renderer does not | The test against the `python/README.md` block fails, and `ci-typescript.yml` watches that file |
 | The real SDK floor is lower than the first version that passes on today's code | Accepted. The floors job finds the lowest that passes, and claiming lower would be a guess about somebody's install |
 | Logging through a second `configureLogging` surprises users | Documented in the README next to the SDK's own call, with the two-line Pino setup that configures both |
