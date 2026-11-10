@@ -4,6 +4,8 @@ const tiers = ['unit', 'contract', 'integration', 'autoembed', 'build', 'example
 
 export default defineConfig({
   test: {
+    // The gate reporter reads every project's results, which no test running in a worker can.
+    reporters: ['default', './test/support/gate-reporter.ts'],
     projects: tiers.map((name) => ({
       test: {
         name,
