@@ -464,8 +464,11 @@ Runs on `pull_request` only. The workflow sets `permissions: contents: read`, pi
 
 **Deferred:** the `autoembed` tier in CI. Automated embedding needs a real Atlas cluster, and Python's `Atlas tiers` job
 gets one from a secret and `python/scripts/atlas_ci_cluster.py`. Wiring TS to that needs the same secret and a decision
-on who pays for the cluster's minutes, so the first pass leaves it out. Before the branch is offered for review, the
-tier is run by hand against a cluster with `MONGODB_AUTOEMBED_URI` set.
+on who pays for the cluster's minutes, so the first pass leaves it out. The `mongodb-atlas-local:preview` image also
+embeds automatically, so a cheaper route may exist: run it as a service container with an embedding-provider key held
+as a secret. Whether that works in CI is untested. Before the branch is offered for review, the tier is run by hand
+with `MONGODB_AUTOEMBED_URI` set. Use the owner's local preview deployment (§12.5) if Python's autoembed tier passes
+there, and a cloud cluster if it does not.
 
 ## 10. Shared files, in the final commit
 
@@ -578,7 +581,7 @@ copy. Don't reuse its id for something else.
 
 ### 12.4 Build order
 
-Each milestone ends green and committed. Run the verification in §12.5 before each commit.
+The work splits into thirteen milestones, M0 to M12, done in order. A new session starts at M0. A resumed session finds the last milestone already done from `git log` and carries on from the next. Each milestone ends green and committed. Run the verification in §12.5 before each commit.
 
 | | Milestone | Commit subject, roughly |
 |---|---|---|
@@ -594,7 +597,7 @@ Each milestone ends green and committed. Run the verification in §12.5 before e
 | M9 | `memory-store.ts`, unit, contract and integration tiers. Gate items 16–19 pass | `feat: add MongoDBMemoryStore` |
 | M10 | `typescript/README.md`, `examples/`, the conventions test, the README-coverage tests, the build tier, and `.github/workflows/ci-typescript.yml` | `docs:` for the README and `ci:` for the workflow, as separate commits |
 | M11 | The shared-file commit (§10): `AGENTS.md`, `CONTRIBUTING.md`, `README.md`. Run the Python checks in §12.5 first | `docs: describe the TypeScript package in the shared documents` |
-| M12 | Run the autoembed tier by hand (§9). Then stop and report to the owner: what is done, the verification output, and what was deferred. **Do not push.** | none |
+| M12 | Run the autoembed tier (§9, §12.5). Then stop and report to the owner: what is done, the verification output, and what was deferred. **Do not push.** | none |
 
 Unit tests may use small hand-written fakes of the driver's `Collection` where Python uses `AsyncMock`. Anything that depends on real server behaviour belongs in the contract tier. That includes ordering, collation, TTL fields, unique-index races and aggregation results.
 
@@ -604,10 +607,24 @@ From `typescript/`, before every commit:
 
 ```bash
 npm run check                          # format, lint, typecheck, unit tier
-MONGODB_URI=mongodb://localhost:27017 npm test -- --project contract
+MONGODB_URI='mongodb://localhost:27017/?directConnection=true' npm test -- --project contract
 ```
 
-For the contract and integration tiers locally, start a deployment with Docker. `mongo:8` covers contract. `mongodb/mongodb-atlas-local:8` covers integration, with `MONGODB_ATLAS_URI=mongodb://localhost:27017/?directConnection=true`.
+From M9 on, also run `--project integration` with `MONGODB_ATLAS_URI` set to the same URI.
+
+**The owner's machine already runs a local Atlas deployment.** It runs through `atlas-local`, from the image `mongodb/mongodb-atlas-local:preview`, with `mongot` and automated embedding on. It listens at `mongodb://localhost:27017/?directConnection=true`. Use it for every tier by setting `MONGODB_URI`, `MONGODB_ATLAS_URI` and `MONGODB_AUTOEMBED_URI` to that URI, in the environment or in an untracked `typescript/.env`. Don't start a second deployment on port 27017.
+
+Nobody has yet confirmed that the autoembed tier passes on this preview image. AGENTS.md describes the tier as needing a cloud cluster. Before relying on the image for autoembed, confirm it with the Python suite once, from `python/`:
+
+```bash
+MONGODB_URI= MONGODB_ATLAS_URI= MONGODB_AUTOEMBED_URI='mongodb://localhost:27017/?directConnection=true' hatch run test -m autoembed
+```
+
+If that passes, the local deployment serves M9 and M12. If it fails on the deployment rather than on a test, tell the owner, and run the TS autoembed tier against a cloud cluster at M12 instead.
+
+The deployment is shared with the owner's own work. Tests touch only databases they create. They name each one `strands_mongodb_test_<8 hex chars>`, unique per run, and drop it when the run ends, as Python's `_drop_test_databases` fixture in `python/tests/conftest.py` does. Nothing in the suite may list, drop or write to any other database.
+
+CI does not use this machine. It runs `mongo:8` and `mongodb/mongodb-atlas-local:8` as service containers (§9).
 
 From `python/`, before the M11 commit and before any commit that touches a file outside `typescript/`:
 
