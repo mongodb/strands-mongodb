@@ -2,6 +2,10 @@
 
 NODE-7997. Status: **approved**, 2026-11-10. Nothing is implemented yet.
 
+**If you are implementing this, read §12 first.** It holds the ground rules, the build order, the map from each
+TS file to the Python source it ports, and the traps that already caught one session out. There is no separate
+implementation plan: this document is the plan.
+
 ## 1. Verdict
 
 **Parity is achievable.** Every Python surface has a TypeScript home, or a stated reason why it doesn't need one. The Strands TS SDK exposes the
@@ -453,15 +457,15 @@ Runs on `pull_request` only. The workflow sets `permissions: contents: read`, pi
 | `Lint and format` | `npm ci`, `format:check`, `lint` |
 | `Typecheck` | `npm run typecheck` |
 | `Unit (Node ${{ matrix.node }})` | `npm run cov`, with Node 22, 24 and 26. The legs are checked against the Node release schedule at implementation, and the list holds only lines in active or maintenance LTS plus the current line |
-| `Contract` | The contract tier against a `mongo` service container, so it needs no secret |
+| `Contract tier (<deployment>)` | A matrix copied from `ci-python.yml`'s `contract` job (read its lines 206–297). One leg runs `mongo:8`, which has no search process. The other runs `mongodb/mongodb-atlas-local:8`, which has `mongot`. Both run the contract tier, and the Atlas-local leg also runs the integration tier with `MONGODB_ATLAS_URI` set to the service URI. No secret is needed |
 | `Dependency floors` | Installs exactly the declared peer floors and runs `unit` and `contract` |
 | `Build` | The build tier: pack, install into an empty directory, import |
 | `Release gate` | Runs every tier available to a pull request, then `gate` |
 
-**Deferred:** an Atlas `integration` and `autoembed` job. CONTRIBUTING describes Python's as using a secret and a
-cluster created by `python/scripts/atlas_ci_cluster.py`. Wiring TS to that cluster needs the same secret and a
-decision on who pays for a second cluster's minutes, so the first pass leaves that job out. The tiers run locally with the
-variables set, and the plan ends with them run against a real cluster by hand before the branch is offered for review.
+**Deferred:** the `autoembed` tier in CI. Automated embedding needs a real Atlas cluster, and Python's `Atlas tiers` job
+gets one from a secret and `python/scripts/atlas_ci_cluster.py`. Wiring TS to that needs the same secret and a decision
+on who pays for the cluster's minutes, so the first pass leaves it out. Before the branch is offered for review, the
+tier is run by hand against a cluster with `MONGODB_AUTOEMBED_URI` set.
 
 ## 10. Shared files, in the final commit
 
@@ -487,4 +491,155 @@ Each of those three Markdown files is in `ci-python.yml`'s `paths`, so the final
 | The Python index commands change and the TS renderer does not | The test against the `python/README.md` block fails, and `ci-typescript.yml` watches that file |
 | The real SDK floor is lower than the first version that passes on today's code | Accepted. The floors job finds the lowest that passes, and claiming lower would be a guess about somebody's install |
 | Logging through a second `configureLogging` surprises users | Documented in the README next to the SDK's own call, with the two-line Pino setup that configures both |
-| Atlas tiers are not in CI on the first pass | Run by hand before review, and named in §9 as deferred with the reason |
+| The autoembed tier is not in CI on the first pass | Run by hand before review, and named in §9 as deferred with the reason |
+
+## 12. Implementation handoff
+
+This section is for the session that builds what §1–§11 describe. It assumes you have read nothing else yet.
+
+### 12.1 Ground rules
+
+These come from the ticket brief (`.claude/NODE-7997-brief.md`, untracked), the owner's global instructions,
+and `AGENTS.md`. Breaking any of them is a defect, however good the code.
+
+- Work in `~/src/strands-mongodb-ts` on branch `NODE-7997-typescript`. Never touch the sibling directory `~/src/strands-mongodb` or its branch `INTPYTHON-1170-SSDLC`.
+- **Never `git push` and never open a pull request.** Ask the owner.
+- Sign off every commit with `git commit -s`. Never add a `Co-authored-by` trailer for the agent.
+- Use conventional commit subjects: `feat:`, `fix:`, `test:`, `refactor:`, `chore:`, `docs:`, `ci:`. Commit often, after each milestone in §12.4 at the latest.
+- Do not modify anything under `python/`, or `.github/workflows/release-python.yml`, or `.github/dependabot.yml`. Reading them is fine and necessary.
+- The TS release pipeline is out of scope: no signing, no SBOM, no Papertrail, no `npm publish`.
+- Edits to `AGENTS.md`, `CONTRIBUTING.md`, `README.md` and `docs/` go in **one separate, final commit**, after all the `typescript/` work (§10, milestone M11).
+- Tests first. A behaviour change comes with the test that proves it, written before the code, and every test that proves a checklist behaviour opens its title with the id (§5.8).
+- Never put a connection string with userinfo in a file. A local `mongodb://localhost:27017` has none and is fine. Anything with a user or password is written `mongodb+srv://<redacted>@cluster.example.net`, which is the only userinfo the repository's sweep allows.
+- Never infer an SDK or driver API. Read the installed package under `typescript/node_modules`.
+- `dependencies` stays empty, and everything goes in `peerDependencies` or `devDependencies`.
+- Never skip a test to get to green. Never silence a warning to make a run quiet.
+- Never write a bare `TODO`. A `TODO(...)` names the thing that has to be settled.
+- If you are blocked on a decision only the owner can make, stop and ask. Don't guess. This document already settles every design question it raises.
+
+### 12.2 Read first
+
+1. `AGENTS.md` and `CONTRIBUTING.md`: the rules and the process this repository runs on.
+2. `python/README.md`: the reference for every behaviour. The TS README is its counterpart.
+3. The Python module you are about to port (§12.3) and its test file. **The Python tests are the specification.** Each docstring names the id it proves, and `grep -n "AT-021" python/tests/*.py` finds the test that defines an id.
+4. The installed SDK, for every type you import. Run `npm install` first, then read `typescript/node_modules/@strands-agents/sdk/dist/src`, starting with `storage/storage.d.ts`, `memory/types.d.ts` and `index.d.ts`.
+
+These import paths are verified against 1.24.0:
+
+```ts
+import { Agent, MemoryManager, SessionManager, StorageError, Tool } from '@strands-agents/sdk'
+import type { JSONValue, Logger, MemoryEntry, MemoryStore, MemoryStoreConfig, SearchOptions, Storage } from '@strands-agents/sdk'
+import { InMemoryStorage } from '@strands-agents/sdk/storage'
+import { Embedder, KeywordSearchStrategy } from '@strands-agents/sdk/storage/search'
+import type { SearchStrategy, StorageSearchResult } from '@strands-agents/sdk/storage/search'
+```
+
+Nothing else is public. In particular, `normalizeKey`, `normalizePrefix`, `namespace`, `resolveNamespace`, `NAMESPACED`
+and `tokenize` are **not** exported. Their source is in `dist/src/storage/storage.js` and
+`dist/src/storage/search/keyword.js`, and §5.6 and §5.7 say how to handle each.
+
+`pymongo-search-utils`, which Python's `_pipeline.py` calls, is not installed anywhere you may touch. To read
+the stages it builds, install it into a throwaway virtualenv in your scratch directory:
+`python3 -m venv <scratch>/psu && <scratch>/psu/bin/pip install pymongo-search-utils==0.3.0`.
+
+### 12.3 Port map
+
+Line numbers are as of `main` at `0de7b9f`.
+
+| TS file | Ports | Behaviour and ids from |
+|---|---|---|
+| `src/types.ts` | `types.py` (all of it). The constants in `storage.py:49-69`, `memory_store.py:61-84`, `_indexes.py:82-170` and `_pipeline.py:54-91` | `test_types.py` |
+| `src/keys.ts` | The SDK's `normalizeKey` and `normalizePrefix`, copied. The prefix normalisation in `storage.py:236-250`, `_encoded_size`, `_successor` and `_abbreviate` in `storage.py:75-125`, and `_id_for` and `_range_for` at `storage.py:636-690` | `test_storage.py`: AT-018, AT-019 |
+| `src/tokenize.ts` | `dist/src/storage/search/keyword.js` in the SDK: `tokenize` and `STOP_WORDS` | `test_storage.py`'s search tests |
+| `src/telemetry.ts` | `_telemetry.py`: `SpanName`, `Attribute` (the allow-list), `LogEvent`, `traced`, `span`, `event_extra`, `annotate`, `event`. Plus `configureLogging` (§5.5) | `test_telemetry.py` |
+| `src/errors.ts` | `_reporting` in `storage.py:126-170` and `memory_store.py:344-378`, and the `StorageError` wrapping | `test_storage.py`: AT-022, AT-036 |
+| `src/client.ts` | `_client.py`, **except** the event-loop parts (`_running_loop`, `_reap_closed_loops` and the loop keying in `_register`) | `test_client.py`: AT-010 to AT-013b |
+| `src/filter.ts` | `_filter.py` | `test_filter.py`: AT-049, AT-050a to AT-050c |
+| `src/pipeline.ts` | `_pipeline.py`, plus the `$vectorSearch` and `$search` stages it gets from `pymongo-search-utils` | `test_pipeline.py` |
+| `src/indexes.ts` | `_indexes.py:82-560`: the specs, the definitions and the command renderer | `test_indexes.py`, and the `<!-- run: mongosh -->` block in `python/README.md` |
+| `src/index-lifecycle.ts` | `_indexes.py:564-1314`: the search-support probe, the collation check, `ensure`, the ready wait, `embed` | `test_indexes.py` |
+| `src/storage.ts` | `storage.py` | `test_storage.py`, `test_construction.py`. Gate items 1–9 |
+| `src/vector-search.ts` | `vector_search.py`, plus `remove()` (§4) | `test_vector_search.py` |
+| `src/memory-store.ts` | `memory_store.py` | `test_memory_store.py`. Gate items 16–19 |
+| `src/index.ts` | `__init__.py`'s export list, eagerly. Python's lazy `__getattr__` exists for the extras and is dropped | `test_init.py` |
+| `README.md` | `python/README.md`, translated | `test_readme.py` |
+| `examples/` | `python/examples/unified_storage.py` and `memory_recall.py` | `test_examples.py` |
+| `test/build/` | n/a | `test_packaging.py` |
+
+These Python test files have no TS counterpart:
+- `test_extras.py` and `test_lazy_exports.py`: there are no extras.
+- `test_migration.py`: it covers `python/MIGRATION.md`.
+- `test_ci.py`, `test_release_ci.py` and `test_atlas_ci_cluster.py`: they cover Python's workflows.
+
+The TS suite gets one CI test of its own instead. It asserts that `ci-typescript.yml`'s `paths` cover every file outside `typescript/` that a TS test reads: today `python/README.md` and `python/tests/test_gate.py`.
+
+A Python test about something Python-only, such as event loops, the `cast` around `add_messages` or mypy, gets no TS
+copy. Don't reuse its id for something else.
+
+### 12.4 Build order
+
+Each milestone ends green and committed. Run the verification in §12.5 before each commit.
+
+| | Milestone | Commit subject, roughly |
+|---|---|---|
+| M0 | Scaffold `typescript/`: `package.json` (name, `"type": "module"`, `engines`, empty `dependencies`, the three peers also as dev dependencies at their latest versions), `tsconfig*.json`, `vitest.config.ts` with one project per tier, ESLint, Prettier, `.gitignore`, a copy of the root `LICENSE`, `src/index.ts` exporting `VERSION`, `test/support/tiers.ts` (the `.env` reading and `describe.skipIf` gating), and one tagged smoke test | `chore: scaffold the TypeScript package` |
+| M1 | The gate: `test/checklist.ts`, the comparison test against `python/tests/test_gate.py`, the id reporter, and the `gate` project. Build it first so that every later test is counted | `test: add the release-gate checklist and reporter` |
+| M2 | `types.ts`, `keys.ts` with its `InMemoryStorage` comparison test, `tokenize.ts` with its `KeywordSearchStrategy` comparison test, `scripts/golden.py` and `test/fixtures/golden.json` | `feat: add types, key normalisation and the tokenizer` |
+| M3 | `telemetry.ts`, `errors.ts` | `feat: add telemetry and error reporting` |
+| M4 | `client.ts` | `feat: add the shared client registry` |
+| M5 | `indexes.ts` with the `python/README.md` comparison test, then `index-lifecycle.ts` | `feat: add index specs and lifecycle` |
+| M6 | `storage.ts`, unit tier then contract tier. Gate items 1–9 pass | `feat: add MongoDBStorage` |
+| M7 | `vector-search.ts` | `feat: add MongoDBVectorSearchStrategy` |
+| M8 | `filter.ts`, `pipeline.ts` | `feat: add filter validation and search pipelines` |
+| M9 | `memory-store.ts`, unit, contract and integration tiers. Gate items 16–19 pass | `feat: add MongoDBMemoryStore` |
+| M10 | `typescript/README.md`, `examples/`, the conventions test, the README-coverage tests, the build tier, and `.github/workflows/ci-typescript.yml` | `docs:` for the README and `ci:` for the workflow, as separate commits |
+| M11 | The shared-file commit (§10): `AGENTS.md`, `CONTRIBUTING.md`, `README.md`. Run the Python checks in §12.5 first | `docs: describe the TypeScript package in the shared documents` |
+| M12 | Run the autoembed tier by hand (§9). Then stop and report to the owner: what is done, the verification output, and what was deferred. **Do not push.** | none |
+
+Unit tests may use small hand-written fakes of the driver's `Collection` where Python uses `AsyncMock`. Anything that depends on real server behaviour belongs in the contract tier. That includes ordering, collation, TTL fields, unique-index races and aggregation results.
+
+### 12.5 Verification
+
+From `typescript/`, before every commit:
+
+```bash
+npm run check                          # format, lint, typecheck, unit tier
+MONGODB_URI=mongodb://localhost:27017 npm test -- --project contract
+```
+
+For the contract and integration tiers locally, start a deployment with Docker. `mongo:8` covers contract. `mongodb/mongodb-atlas-local:8` covers integration, with `MONGODB_ATLAS_URI=mongodb://localhost:27017/?directConnection=true`.
+
+From `python/`, before the M11 commit and before any commit that touches a file outside `typescript/`:
+
+```bash
+MONGODB_URI= MONGODB_ATLAS_URI= MONGODB_AUTOEMBED_URI= hatch run test tests/test_ci.py tests/test_conventions.py
+```
+
+**Known local failure:** while `.claude/NODE-7997-brief.md` contains an unredacted connection string,
+`test_no_swept_document_carries_a_credential` fails on that file and on no other. The file is untracked, so CI never
+sees it. Any *other* file in that failure is yours to fix. Don't edit the brief.
+
+The work is done when all of these hold:
+- `npm run cov` passes both coverage floors.
+- The contract, integration and gate projects pass against local deployments.
+- The build tier passes with `STRANDS_MONGODB_BUILD_TIER=1`.
+- The Python checks above pass, apart from the known failure.
+- `git status` shows nothing but `.claude/`.
+
+### 12.6 Traps
+
+- **The SDK's internals are not public** (§12.2). An import from a deep `dist/` path typechecks in some setups and fails at runtime because of the `exports` map. Copy the code, and test the copy against the public behaviour.
+- **`AGENTS.md` is read by Python tests** (§10):
+  - No `3.N` version strings anywhere in it.
+  - Backticked file paths only once the files exist.
+  - Tier variables reuse the Python names.
+  - No `-m` next to `pytest` or `hatch run test` unless it names a registered marker.
+
+  Write it last.
+- **`CONTRIBUTING.md` tables:** a table row whose first cell is a backticked name starting with a capital is read as a `ci-python.yml` job. Keep the TS job table in `typescript/README.md`.
+- **`npm run prepare` runs on every install.** The aggregate command is `npm run check`.
+- **`Buffer` is not `Uint8Array` for `toEqual`.** Copy driver `Binary` payloads into a fresh `Uint8Array` (§6).
+- **Search indexes are slow and eventually consistent.** A first `add()` waits minutes for `READY`, and a write is not immediately searchable. Poll to a 180 s ceiling. Never sleep for a fixed time.
+- **`addMessages` must stay absent** from `MongoDBMemoryStore`. If it is present, the SDK sends raw messages and skips extraction (§4, checklist item 20).
+- **The release gate reads only the leading ids of a title.** `it('AT-021 — ...')` counts, and `it('reads ... (AT-021)')` does not.
+- **The `paths` filter of `ci-typescript.yml`** must list every file outside `typescript/` that a TS test reads. A test enforces this, so adding such a read means extending the filter.
