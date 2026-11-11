@@ -1012,7 +1012,7 @@ def _step_env(workflow: dict[str, Any], job: dict[str, Any], step: dict[str, Any
 class TestAJobThatChecksNothingOutStillRuns:
     """``AT-172`` -- the three things a checkout-less job silently depends on.
 
-    Four jobs here never check out: they download an artifact, act on it, and upload the result.
+    Five jobs here never check out: they download an artifact, act on it, and upload the result.
     That is deliberate -- a job that signs a wheel has no use for a working tree, and a checkout it
     does not need is a credential and a cache surface it does not need either. But three pieces of
     this workflow's configuration quietly assume a checkout exists, and each of them fails at run
