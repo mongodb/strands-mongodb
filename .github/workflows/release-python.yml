@@ -412,7 +412,8 @@ jobs:
           "$SBOM_ENV/bin/python" -m pip install --quiet '.[all]'
 
           "$SBOM_TOOL/bin/cyclonedx-py" environment "$SBOM_ENV/bin/python" \
-            --output-format json --outfile sbom.json
+            --pyproject pyproject.toml --mc-type library \
+            --output-format json --output-file sbom.json
           test -s sbom.json
 
       - name: Upload the SBOM for the publishing job
