@@ -67,13 +67,16 @@ a tag is marked as a prerelease, so it does not displace the last stable one.
 | `sign` | Sign the artifact | Checksums the wheel and the sdist, signs all three with Garasign, uploads `python-signatures` |
 | `publish` | Publish to PyPI | Downloads `python-dist` and uploads it |
 | `github-release` | Attach the signatures to the GitHub Release | Creates the Release for the tag if it does not exist, attaches the artifacts, the `.sig` files and `SHA256SUMS` |
-| `sbom` | Generate the SBOM | Installs the project with its `all` extra into a clean virtualenv, runs `cyclonedx-py` against it, uploads `python-sbom`. Always runs. Holds no credential |
-| `sbom-publish` | Augment and attach the SBOM | Downloads `python-sbom` and attaches it to the Release as `cyclonedx.sbom.json`. Always runs. Augments it through SilkBomb/Kondukto first **only** if `KONDUKTO_SECRET_ID` is set |
-| `trace` | Record the authorized publication | Writes the authorized-publication report and uploads it to S3. **Skipped** unless `AWS_RELEASE_BUCKET` is set |
+| `sbom` | Generate the SBOM | Installs the project with its `all` extra into a clean virtualenv, runs `cyclonedx-py` against it, writes the released version and `pkg:pypi/strands-mongodb@<version>` into its root component, uploads `python-sbom`. Always runs. Holds no credential |
+| `sbom-publish` | Augment and attach the SBOM | Downloads `python-sbom` and attaches it to the Release as `cyclonedx.sbom.json`, then uploads that file as `python-sbom-attached`. Always runs. Augments it through SilkBomb/Kondukto first **only** if `KONDUKTO_SECRET_ID` is set |
+| `trace` | Record the authorized publication | Writes the authorized-publication report over every file on the Release (artifacts, `.sig` files, `SHA256SUMS`, the SBOM) and uploads the report and the SBOM to `s3://<bucket>/strands-mongodb/<version>/`. **Skipped** unless `AWS_RELEASE_BUCKET` is set |
 
 `gate` and `contract` run in parallel; `build` needs both; `sign` needs `build`; `publish` needs
 `sign`; `github-release` needs `publish`; `sbom` needs `github-release`; `sbom-publish` needs
-`sbom`; `trace` needs `publish`.
+`sbom`; `trace` needs `publish` and `sbom-publish`.
+
+`trace` runs last because its report covers the SBOM, which is attached last. A red `sbom-publish`
+therefore leaves `trace` skipped as well; **Re-run failed jobs** runs both, and neither touches PyPI.
 
 `publish` needs `sign` rather than `build` on purpose: an artifact that was not signed cannot reach
 PyPI, because the job that uploads it does not start until the job that signs it has succeeded.

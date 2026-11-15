@@ -19,6 +19,7 @@ nothing about whether an upload would succeed.
 from __future__ import annotations
 
 import fnmatch
+import json
 import re
 import subprocess
 import sys
@@ -1191,3 +1192,306 @@ class TestAPrereleaseIsNotTheLatestRelease:
             f"`gh release create` for {tag} was handed {creates[0]}. A version that is not a final "
             f"release must be marked, or GitHub lists it as this repository's latest release"
         )
+
+
+#: The abx-release-tools actions the trace job is built from, named without the pin so the assertions
+#: survive a repin. ``TestTheActionThatUploadsIsPinnedToContentRatherThanToAPlace`` owns the pin.
+SETUP_ACTION = "mongodb-labs/abx-release-tools/actions/setup"
+AUTHORIZED_PUB_ACTION = "mongodb-labs/abx-release-tools/actions/authorized-pub"
+UPLOAD_S3_ACTION = "mongodb-labs/abx-release-tools/actions/upload-s3-assets"
+
+#: The asset name ``sbom-publish`` attaches, augmented or not, and the key it is stored under in S3.
+SBOM_ASSET = "cyclonedx.sbom.json"
+
+#: ``gh release upload "$TAG" a b \`` and its continuation lines, up to the end of the command.
+_RELEASE_UPLOAD = re.compile(r"\bgh\s+release\s+upload\s+((?:[^\n]*\\\n)*[^\n]*)")
+
+
+def _attached_to_the_release(workflow: dict[str, Any]) -> dict[str, str]:
+    """Every file any job hands ``gh release upload``, as ``{base name or glob: job}``.
+
+    Read out of the scripts rather than listed here, so that an asset added to the Release is an asset
+    the trace report has to answer for. Flags start with ``-``, the tag is ``"$TAG"``, and every file is
+    passed as a path under the directory the job assembled it in, which is what tells the two apart.
+    """
+    attached: dict[str, str] = {}
+    for name, job in _jobs(workflow).items():
+        for step in _steps(job):
+            for command in _RELEASE_UPLOAD.finditer(str(step.get("run", ""))):
+                for token in command.group(1).replace("\\\n", " ").split():
+                    if "/" in token and not token.startswith("-"):
+                        attached[PurePosixPath(token).name] = name
+    return attached
+
+
+class TestTheTraceRecordCoversEverythingTheReleasePublished:
+    """``AT-245`` -- the authorized-publication report names every file a consumer can download.
+
+    The report is the release's trace record: who published what, from which run, and the checksum of
+    each file. The signing guide asks for the signatures and the checksum file to be in it beside the
+    artifacts, because the record exists so that a file found in the wild can be matched to the release
+    that produced it, and a ``.sig`` or an SBOM is as findable as a wheel.
+
+    The comparison is against the files the workflow actually attaches to the GitHub Release, not a list
+    written in this test, so the report cannot fall behind the Release without a red run.
+    """
+
+    @staticmethod
+    def _trace(workflow: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """The one job that writes the report."""
+        jobs = _jobs(workflow)
+        found = [name for name, job in jobs.items() if _step_uses(job, AUTHORIZED_PUB_ACTION)]
+        assert len(found) == 1, f"{len(found)} jobs write an authorized-publication report; expected one"
+        return found[0], jobs[found[0]]
+
+    @staticmethod
+    def _reported(job: dict[str, Any]) -> list[str]:
+        """The patterns handed to ``authorized-pub``, one per line, as the action reads them."""
+        steps = _step_uses(job, AUTHORIZED_PUB_ACTION)
+        assert len(steps) == 1, f"{len(steps)} authorized-pub steps in the trace job; expected one"
+        filenames = str((steps[0].get("with") or {}).get("filenames", ""))
+        return [line.strip() for line in filenames.splitlines() if line.strip()]
+
+    def test_the_report_names_every_file_the_release_attaches(self, workflow: dict[str, Any]) -> None:
+        """AT-245 -- the two sets are equal, so neither can grow without the other."""
+        _, job = self._trace(workflow)
+        reported = set(self._reported(job))
+        attached = _attached_to_the_release(workflow)
+
+        assert attached, "nothing attaches a file to the GitHub Release, so there is nothing to compare against"
+        assert reported == set(attached), (
+            f"the Release carries {sorted(set(attached) - reported)} that the report does not record, and "
+            f"the report records {sorted(reported - set(attached))} that the Release does not carry"
+        )
+
+    def test_the_signatures_and_the_checksums_are_in_it(self, workflow: dict[str, Any]) -> None:
+        """AT-245 -- the guide's requirement, stated directly, in case the Release ever loses them too."""
+        _, job = self._trace(workflow)
+        required = {"*.whl.sig", "*.tar.gz.sig", "SHA256SUMS", "SHA256SUMS.sig", SBOM_ASSET}
+        missing = required - set(self._reported(job))
+        assert not missing, f"the authorized-publication report does not record {sorted(missing)}"
+
+    def test_files_named_rather_than_paths_on_a_runner(self, workflow: dict[str, Any]) -> None:
+        """AT-245 -- ``authorized-pub`` records each path exactly as it is handed.
+
+        ``dist/strands_mongodb-1.0.0.tar.gz`` would name a directory on a runner that no longer exists. The
+        record is read by someone holding a downloaded file, and the file they hold has a base name. So
+        the patterns carry no directory, and the downloads land where the patterns are resolved: the
+        workspace root, which is where a composite action's steps start.
+        """
+        name, job = self._trace(workflow)
+        with_directory = [pattern for pattern in self._reported(job) if "/" in pattern]
+        assert not with_directory, f"the report in `{name}` records runner paths, not file names: {with_directory}"
+
+        for step in _steps(job):
+            if not str(step.get("uses", "")).startswith(DOWNLOAD_ACTION):
+                continue
+            path = (step.get("with") or {}).get("path")
+            assert path in (None, ".", "${{ github.workspace }}"), (
+                f"`{name}` downloads {step['with'].get('name')!r} into {path!r}, but the report's patterns "
+                f"are resolved in the workspace root and would match nothing there"
+            )
+
+    def test_every_artifact_it_reads_is_finished_before_it_starts(self, workflow: dict[str, Any]) -> None:
+        """AT-245 -- an artifact exists once the job that uploads it has finished, and not before.
+
+        A download from a job that is not an ancestor races it, and on the run where the trace job wins
+        the race it receives an empty directory and fails after the upload to PyPI has happened.
+        """
+        jobs = _jobs(workflow)
+        name, job = self._trace(workflow)
+        producers = {
+            (step.get("with") or {}).get("name"): producer
+            for producer, other in jobs.items()
+            for step in _steps(other)
+            if str(step.get("uses", "")).startswith(UPLOAD_ACTION)
+        }
+        ancestors = _ancestors(jobs, name)
+        downloads = [
+            (step.get("with") or {}).get("name")
+            for step in _steps(job)
+            if str(step.get("uses", "")).startswith(DOWNLOAD_ACTION)
+        ]
+
+        assert downloads, f"`{name}` downloads nothing, so its report could only say `No published artifacts.`"
+        for artifact in downloads:
+            assert producers.get(artifact) in ancestors, (
+                f"`{name}` downloads {artifact!r}, written by `{producers.get(artifact)}`, which it does not "
+                f"wait for (it needs {sorted(ancestors)})"
+            )
+
+    def test_the_sbom_recorded_is_the_one_the_release_carries(self, workflow: dict[str, Any]) -> None:
+        """AT-245 -- the attached SBOM may be augmented, so the generated one is not a substitute.
+
+        ``sbom-publish`` replaces the generated document with SilkBomb's output when Kondukto is
+        configured. A trace job reading ``python-sbom`` would then record, and store, a checksum for a
+        file nobody can download.
+        """
+        jobs = _jobs(workflow)
+        name, job = self._trace(workflow)
+        attaching = _attached_to_the_release(workflow).get(SBOM_ASSET)
+        assert attaching, f"no job attaches {SBOM_ASSET} to the Release"
+
+        handed_on = {
+            str((step.get("with") or {}).get("name"))
+            for step in _steps(jobs[attaching])
+            if str(step.get("uses", "")).startswith(UPLOAD_ACTION)
+            and PurePosixPath(str((step.get("with") or {}).get("path", ""))).name == SBOM_ASSET
+        }
+        downloaded = {
+            str((step.get("with") or {}).get("name"))
+            for step in _steps(job)
+            if str(step.get("uses", "")).startswith(DOWNLOAD_ACTION)
+        }
+        assert handed_on & downloaded, (
+            f"`{attaching}` attaches {SBOM_ASSET} but `{name}` never downloads that file; it uploads "
+            f"{sorted(handed_on) or 'nothing'} and `{name}` downloads {sorted(downloaded)}"
+        )
+
+    def test_the_report_and_the_sbom_both_reach_the_bucket(self, workflow: dict[str, Any]) -> None:
+        """AT-245 -- the layout the other ABX packages use: the report and the SBOM, side by side.
+
+        ``upload-s3-assets`` uploads what is in ``$S3_ASSETS``, which ``setup`` creates and
+        ``authorized-pub`` writes the report into. The SBOM is downloaded elsewhere, so a step has to put
+        it there, after ``setup`` has made the directory and before the upload reads it.
+        """
+        name, job = self._trace(workflow)
+        steps = _steps(job)
+
+        def first(predicate: Any, what: str) -> int:
+            found = [index for index, step in enumerate(steps) if predicate(step)]
+            assert found, f"`{name}` has no step that {what}"
+            return found[0]
+
+        setup = first(lambda step: str(step.get("uses", "")).startswith(SETUP_ACTION), "runs setup")
+        staged = first(
+            lambda step: SBOM_ASSET in str(step.get("run", "")) and "S3_ASSETS" in str(step.get("run", "")),
+            f"copies {SBOM_ASSET} into $S3_ASSETS",
+        )
+        upload = first(lambda step: str(step.get("uses", "")).startswith(UPLOAD_S3_ACTION), "uploads to S3")
+        assert setup < staged < upload, (
+            f"in `{name}` setup is step {setup}, the SBOM is staged at {staged} and the upload is {upload}; "
+            "the directory has to exist before the copy and hold the SBOM before the upload"
+        )
+
+        filenames = str((steps[upload].get("with") or {}).get("filenames", "*")).split()
+        assert "*" in filenames or {"authorized-publication.txt", SBOM_ASSET} <= set(filenames), (
+            f"the S3 upload in `{name}` is limited to {filenames}, which leaves the report or the SBOM behind"
+        )
+
+
+#: What ``cyclonedx-py environment --pyproject`` writes for this package, cut down to the parts the
+#: step under test touches or must not touch. The root has no version and no purl because
+#: ``pyproject.toml`` declares the version ``dynamic``, and the tool reads that file statically.
+_GENERATED_SBOM: dict[str, Any] = {
+    "bomFormat": "CycloneDX",
+    "specVersion": "1.6",
+    "metadata": {"component": {"bom-ref": "root-component", "name": "strands-mongodb", "type": "library"}},
+    "components": [
+        {
+            "bom-ref": "pymongo==4.15.0",
+            "name": "pymongo",
+            "purl": "pkg:pypi/pymongo@4.15.0",
+            "type": "library",
+            "version": "4.15.0",
+        }
+    ],
+    "dependencies": [{"ref": "pymongo==4.15.0"}, {"ref": "root-component"}],
+}
+
+
+class TestTheSbomSaysWhichReleaseItDescribes:
+    """``AT-246`` -- the SBOM's root component carries the released version and its package URL.
+
+    ``--pyproject`` makes this package the root component, read from ``pyproject.toml``, where the
+    version is ``dynamic`` because hatch-vcs derives it from the tag. ``cyclonedx-py`` has no option to
+    supply one, so without a step after generation the root names no version and no ``purl``. The
+    document then lists every dependency correctly and cannot say which release it is the SBOM of,
+    which is the one question a scanner matching it to a vulnerable version asks first.
+    """
+
+    @staticmethod
+    def _naming_step(workflow: dict[str, Any]) -> tuple[str, int, str]:
+        """The step that names the root, its job, and its index there."""
+        found = [
+            (name, index, str(step.get("run", "")))
+            for name, job in _jobs(workflow).items()
+            for index, step in enumerate(_steps(job))
+            if "pkg:pypi/" in str(step.get("run", ""))
+        ]
+        assert len(found) == 1, f"{len(found)} steps write a package URL into the SBOM; expected one"
+        return found[0]
+
+    @staticmethod
+    def _run(script: str, tmp_path: Path, installed: str) -> subprocess.CompletedProcess[str]:
+        """Run the step against a generated SBOM and an environment with ``installed`` in it.
+
+        ``$SBOM_ENV/bin/python`` is the interpreter the project was installed into, so a stand-in for it
+        reports the version. ``python`` is the runner's own, which here is this interpreter.
+        """
+        (tmp_path / "sbom.json").write_text(json.dumps(_GENERATED_SBOM, indent=2))
+        env_bin = tmp_path / "sbom-env" / "bin"
+        env_bin.mkdir(parents=True)
+        (env_bin / "python").write_text(f"#!/usr/bin/env bash\nprintf '%s\\n' {installed!r}\n")
+        (env_bin / "python").chmod(0o755)
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "python").write_text(f'#!/usr/bin/env bash\nexec {sys.executable!r} "$@"\n')
+        (bin_dir / "python").chmod(0o755)
+
+        return subprocess.run(  # noqa: S603 - a fixed interpreter on a script this repository owns
+            ["bash", "-c", script],
+            cwd=tmp_path,
+            env={"PATH": f"{bin_dir}:/usr/bin:/bin", "SBOM_ENV": str(tmp_path / "sbom-env")},
+            capture_output=True,
+            text=True,
+        )
+
+    def test_it_runs_after_generation_in_the_job_that_generates(self, workflow: dict[str, Any]) -> None:
+        """AT-246 -- before the upload, so the artifact every later job reads is the named one."""
+        name, index, _ = self._naming_step(workflow)
+        steps = _steps(_jobs(workflow)[name])
+        generated = [i for i, step in enumerate(steps) if "cyclonedx-py" in str(step.get("run", ""))]
+        uploaded = [i for i, step in enumerate(steps) if str(step.get("uses", "")).startswith(UPLOAD_ACTION)]
+        assert generated and uploaded, f"`{name}` names the root but does not both generate and upload the SBOM"
+        assert generated[0] < index < uploaded[0], (
+            f"in `{name}` the SBOM is generated at step {generated[0]}, named at {index} and uploaded at "
+            f"{uploaded[0]}; naming it anywhere else names a file nobody reads"
+        )
+
+    @pytest.mark.parametrize("version", ["1.0.0", "1.0.0rc1", "0.1.0.dev1"])
+    def test_the_root_names_the_version_that_was_installed(
+        self, workflow: dict[str, Any], tmp_path: Path, version: str
+    ) -> None:
+        """AT-246 -- the script is run, not read, against the shape ``cyclonedx-py`` writes."""
+        _, _, script = self._naming_step(workflow)
+        result = self._run(script, tmp_path, version)
+        assert result.returncode == 0, f"the step failed for {version}:\n{result.stderr}"
+
+        bom = json.loads((tmp_path / "sbom.json").read_text())
+        root = bom["metadata"]["component"]
+        assert root.get("version") == version
+        assert root.get("purl") == f"pkg:pypi/strands-mongodb@{version}"
+
+    def test_nothing_but_the_root_is_rewritten(self, workflow: dict[str, Any], tmp_path: Path) -> None:
+        """AT-246 -- ``bom-ref`` is what the dependency graph points at, so it must not move."""
+        _, _, script = self._naming_step(workflow)
+        result = self._run(script, tmp_path, "1.0.0")
+        assert result.returncode == 0, result.stderr
+
+        bom = json.loads((tmp_path / "sbom.json").read_text())
+        root = bom["metadata"].pop("component")
+        expected = json.loads(json.dumps(_GENERATED_SBOM))
+        expected_root = expected["metadata"].pop("component")
+        assert bom == expected, "the step changed something other than the root component"
+        assert {k: v for k, v in root.items() if k not in ("version", "purl")} == expected_root
+
+    def test_a_version_not_built_from_the_tag_is_refused(self, workflow: dict[str, Any], tmp_path: Path) -> None:
+        """AT-246 -- a local segment is what hatch-vcs produces when it cannot see the tag.
+
+        ``fetch-depth: 0`` is what prevents it, and it is one line in a checkout block. An SBOM filed
+        under ``1.0.1.dev3+g1a2b3c4`` would describe a version that was never published.
+        """
+        _, _, script = self._naming_step(workflow)
+        result = self._run(script, tmp_path, "1.0.1.dev3+g1a2b3c4")
+        assert result.returncode != 0, "the step accepted a version that hatch-vcs derived without the tag"
