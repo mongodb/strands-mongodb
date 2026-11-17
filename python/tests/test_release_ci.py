@@ -1380,6 +1380,35 @@ class TestTheTraceRecordCoversEverythingTheReleasePublished:
         )
 
 
+_GATING_VARIABLE = re.compile(r"\bvars\.([A-Za-z_][A-Za-z0-9_]*)\s*!=\s*''")
+
+
+class TestTheBucketThatSwitchesTraceOnIsTheBucketItWritesTo:
+    """``AT-247`` -- the repository variable that gates ``trace`` is also the bucket ``trace`` uploads to.
+
+    ``upload-s3-assets`` writes to ``$AWS_BUCKET``, and ``setup`` fills that from ``RELEASE_ASSETS_BUCKET``
+    and from nothing else. Gating the job on one variable while the bucket comes from another source means
+    the first run with the gate open fails at the upload, after the release is on PyPI, saying the bucket
+    is not set.
+    """
+
+    def test_the_setup_step_is_handed_the_variable_the_job_is_gated_on(self, workflow: dict[str, Any]) -> None:
+        """AT-247 -- one variable, read in both places, so the gate and the destination cannot disagree."""
+        jobs = _jobs(workflow)
+        name, job = TestTheTraceRecordCoversEverythingTheReleasePublished._trace(workflow)
+
+        gate = _GATING_VARIABLE.search(str(job.get("if", "")))
+        assert gate, f"`{name}` is not gated on a repository variable, so nothing says which bucket it uses"
+
+        setups = _step_uses(job, SETUP_ACTION)
+        assert len(setups) == 1, f"{len(setups)} setup steps in `{name}`; expected one"
+        handed = _step_env(workflow, jobs[name], setups[0]).get("RELEASE_ASSETS_BUCKET")
+        assert handed == f"${{{{ vars.{gate.group(1)} }}}}", (
+            f"`{name}` runs only when vars.{gate.group(1)} is set, but its setup step sees "
+            f"RELEASE_ASSETS_BUCKET={handed!r}, so the upload would have no bucket to write to"
+        )
+
+
 #: What ``cyclonedx-py environment --pyproject`` writes for this package, cut down to the parts the
 #: step under test touches or must not touch. The root has no version and no purl because
 #: ``pyproject.toml`` declares the version ``dynamic``, and the tool reads that file statically.

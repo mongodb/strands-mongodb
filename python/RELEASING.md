@@ -83,7 +83,10 @@ PyPI, because the job that uploads it does not start until the job that signs it
 
 `trace` is gated on a repository variable and is skipped, not failed, while that variable is empty.
 A skipped job is green. It becomes live the moment the variable is set, with no change to this file
-or to the workflow.
+or to the workflow. The variable's value is the bucket name, `abx-release-assets`, and it has to be a
+repository variable rather than one on `release-signing`: a job's `if:` is evaluated before its
+environment is, so an environment variable would leave `trace` skipped forever. The role `trace`
+assumes needs `s3:PutObject` on that bucket.
 
 `sbom` is **not** gated. Generating a CycloneDX SBOM needs no credential and no vendor, so every
 release ships one. Only the SilkBomb/Kondukto augmentation waits on `KONDUKTO_SECRET_ID`, step by
