@@ -567,8 +567,6 @@ jobs:
 
       - name: Set up the release environment
         uses: mongodb-labs/abx-release-tools/actions/setup@9d8e5070f37497b4d2d0239c80d65eacc096fdbc
-        env:
-          RELEASE_ASSETS_BUCKET: ${{ vars.AWS_RELEASE_BUCKET }}
         with:
           aws_role_arn: ${{ vars.AWS_SIGNING_ROLE_ARN }}
           aws_region_name: ${{ vars.AWS_SIGNING_REGION }}

@@ -83,9 +83,11 @@ PyPI, because the job that uploads it does not start until the job that signs it
 
 `trace` is gated on a repository variable and is skipped, not failed, while that variable is empty.
 A skipped job is green. It becomes live the moment the variable is set, with no change to this file
-or to the workflow. The variable's value is the bucket name, `abx-release-assets`, and it has to be a
+or to the workflow. The variable only switches the job on, so any non-empty value works. It has to be a
 repository variable rather than one on `release-signing`: a job's `if:` is evaluated before its
-environment is, so an environment variable would leave `trace` skipped forever. The role `trace`
+environment is, so an environment variable would leave `trace` skipped forever. The bucket itself comes
+from the release secret, which holds a `release-assets-bucket` key. The workflow must not set
+`RELEASE_ASSETS_BUCKET` as well: the secrets action refuses a name that is already set. The role `trace`
 assumes needs `s3:PutObject` on that bucket.
 
 `sbom` is **not** gated. Generating a CycloneDX SBOM needs no credential and no vendor, so every
