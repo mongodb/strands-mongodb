@@ -529,12 +529,8 @@ jobs:
 
   trace:
     name: Record the authorized publication
-    # Last, because the report covers every file on the Release and the SBOM is attached last. The
-    # cost: a red `sbom-publish` leaves this skipped. "Re-run failed jobs" runs both.
+    # See Guide 3: Artifact tracing
     needs: [publish, sbom-publish]
-    # Inert until the release bucket exists. Papertrail itself is reachable only from Evergreen and
-    # Drone hosts inside AWS, never from a GitHub Actions runner, so the sanctioned path from here is
-    # the S3 report that mongo-python-driver writes.
     if: vars.AWS_RELEASE_BUCKET != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -546,9 +542,6 @@ jobs:
       id-token: write
 
     steps:
-      # Into the workspace root, all three. `authorized-pub` records each path exactly as it is
-      # handed, so `dist/x.whl` would name a directory on a runner rather than the file a consumer
-      # holds, and its steps resolve patterns from the workspace root.
       - name: Download the artifact that was published
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
@@ -567,16 +560,11 @@ jobs:
           name: python-sbom-attached
           path: ${{ github.workspace }}
 
-      # `working-directory`, like every other `run:` step in a job that checks nothing out: the
-      # workflow default is `python`, which exists only in a checkout. Without the override the step
-      # fails before it runs, with `Unable to locate executable file` naming the directory.
       - name: The version this run published
         id: version
         working-directory: ${{ github.workspace }}
         run: echo "value=${GITHUB_REF_NAME#python-v}" >> "$GITHUB_OUTPUT"
 
-      # `setup` exports AWS_BUCKET from RELEASE_ASSETS_BUCKET and from nothing else, and the upload
-      # writes to AWS_BUCKET. The variable that switches this job on is therefore also the bucket.
       - name: Set up the release environment
         uses: mongodb-labs/abx-release-tools/actions/setup@9d8e5070f37497b4d2d0239c80d65eacc096fdbc
         env:
@@ -586,8 +574,6 @@ jobs:
           aws_region_name: ${{ vars.AWS_SIGNING_REGION }}
           aws_secret_id: ${{ vars.AWS_SIGNING_SECRET_ID }}
 
-      # Every file on the Release, named rather than globbed: `python-signatures` also carries
-      # `release_run_id.txt`, which is not published.
       - name: Write the authorized publication report
         uses: mongodb-labs/abx-release-tools/actions/authorized-pub@9d8e5070f37497b4d2d0239c80d65eacc096fdbc
         with:
