@@ -5,6 +5,12 @@
 Work that has landed on `main` and is not yet inside a tagged version. Entries move down into a
 version heading when that version is tagged.
 
+### Fixed
+
+- The examples no longer print a password that holds an unencoded `/` or `@`. `redact` in
+  `examples/_support.py` stopped at the first of either, so a connection string pasted without
+  percent-encoding reached stdout whole or in part, before the driver rejected it.
+
 ## [1.0.0] - 2026-11-18
 
 Official release of MongoDB storage and memory backends for the [Strands Agents](https://strandsagents.com) SDK.

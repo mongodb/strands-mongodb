@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shlex
 from collections.abc import AsyncIterator, Sequence
 from itertools import count
@@ -40,9 +39,6 @@ __all__ = [
 #: The environment variable both examples read the connection string from.
 URI_VARIABLE = "MONGODB_URI"
 
-#: Everything between the scheme and the host, which is where a password sits.
-_CREDENTIALS = re.compile(r"://[^@/]+@")
-
 _line = count(1)
 
 
@@ -69,10 +65,15 @@ def redact(uri: str) -> str:
         uri: A MongoDB connection string.
 
     Returns:
-        The same string with everything between ``://`` and ``@`` replaced by ``<redacted>``. A URI
-        with no credentials comes back unchanged.
+        The same string with everything between ``://`` and the last ``@`` replaced by ``<redacted>``.
+        The last one, because a password pasted without percent-encoding can hold ``/`` and ``@``
+        itself. A URI with no ``@`` comes back unchanged.
     """
-    return _CREDENTIALS.sub("://<redacted>@", uri)
+    scheme, separator, rest = uri.partition("://")
+    _, at, host = rest.rpartition("@")
+    if not separator or not at:
+        return uri
+    return f"{scheme}://<redacted>@{host}"
 
 
 def connection() -> str:

@@ -26,7 +26,7 @@ the repository over SSH, as the package README's
 
 `MONGODB_URI` is the only variable either script requires. Both refuse to run without it and name it in
 the message. Where a script prints the URI it prints it redacted, with everything between `://` and
-`@` replaced by `<redacted>`, on every path including failures.
+the last `@` replaced by `<redacted>`, on every path including failures.
 
 Keep the URI in a file you do not commit and load it at the shell:
 
