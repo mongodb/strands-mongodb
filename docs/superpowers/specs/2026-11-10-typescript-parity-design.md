@@ -31,7 +31,12 @@ only where something would otherwise be false.
 Out:
 - Anything under `python/`.
 - `.github/workflows/release-python.yml`.
-- The TypeScript release pipeline: signing, SBOM, Papertrail and npm publish are a follow-on ticket.
+- The TypeScript release pipeline: signing, SBOM, Papertrail and npm publish are a follow-on ticket. Its
+  template is `release-python.yml` as released at `python-v1.0.0`, which by then held the SBOM, the trace job
+  and digest pinning throughout, with `python/tests/test_release_ci.py` asserting each. TS releases will need
+  their own tag prefix (`python/RELEASING.md` already says so) and their own changelog.
+- `.github/workflows/zizmor.yml` and its rules. The TS workflow is scanned by it and must pass (§9), but
+  the scan itself is not changed.
 - `.github/dependabot.yml`. `python/tests/test_ci.py::test_nothing_proposes_a_new_dependency_floor` holds that raising a floor is a support-window decision, and an npm entry would propose exactly that.
 
 Both surfaces, storage and memory, ship in one plan, as agreed.
@@ -444,13 +449,43 @@ a new one appears there, mirroring `test_readme.py`.
 
 ## 9. CI: `.github/workflows/ci-typescript.yml`
 
-Runs on `pull_request` only. The workflow sets `permissions: contents: read`, pins every action by SHA as `ci-python.yml` does, and runs every job in `typescript/`.
+Runs on `pull_request` only. The workflow sets `permissions: contents: read` and runs every job in `typescript/`.
+
+Three rules arrived on `main` after this design was first written, and each one constrains this file:
+
+- **Every action is pinned to a 40-character commit digest**, with the version in a trailing comment
+  (`uses: actions/checkout@<digest> # v7.0.1`). This is stricter than `ci-python.yml`, which pins by tag
+  in its matrix and by digest only in its credentialed `atlas` job. `.github/workflows/zizmor.yml` scans every
+  workflow on every change under `.github/workflows/`, with zizmor 1.32.0, which audits `unpinned-uses` by
+  default. The argued exceptions in `.github/zizmor.yml` name `ci-python.yml` only, and this workflow takes no
+  exception for actions. Every `actions/checkout` step sets `persist-credentials: false` (zizmor's
+  `artipacked`), and no job holds a permission it does not use.
+- **Every job with a MongoDB `services:` container runs on `ubuntu-22.04`.** MongoDB 8.x refuses to start
+  on kernel 6.19 and newer, which `ubuntu-latest` reached with runner image 20261025 (Python's AT-235,
+  SERVER-125742). Python's test for this reads only Python's two workflows, so nothing outside this
+  workflow's own test would catch it.
+- **Service images.** `mongo:8` and `mongodb/mongodb-atlas-local:8` are tags, which zizmor's
+  `unpinned-images` reports. **Choice:** add `ci-typescript.yml` to that rule's `ignore` list in
+  `.github/zizmor.yml`, under a comment that argues it the way the `ci-python.yml` entry does (disposable
+  fixtures that hold no credentials, a matrix meant to track the server users install). `test_ci.py`'s
+  `test_every_suppression_is_argued` requires at least three comment lines per ignored entry across the
+  file, so the new entry brings its own.
+
+The TS CI test (§12.3) asserts the first two rules on `ci-typescript.yml`, since no Python test reads it.
+
+`.pre-commit-config.yaml` (also new on `main`) runs Python's `Lint` job locally, scoped to `^python/`. Its
+generic hooks (`check-yaml`, `end-of-file-fixer`, `trailing-whitespace`, `check-added-large-files`) already
+cover `typescript/`. It gains three `language: system` hooks scoped to `^typescript/` that run what the
+`Lint and format` and `Typecheck` jobs run: `npm --prefix typescript run format:check`, `lint` and
+`typecheck`, each with `pass_filenames: false` for the reason the Python hooks give. They land in the same
+`ci:` commit as the workflow.
 
 `paths:` covers the following:
 - `typescript/**` and `.github/workflows/ci-typescript.yml`.
 - `python/README.md`, because of the index-command comparison.
 - `python/tests/test_gate.py`, because of the checklist comparison.
 - `AGENTS.md`, `CONTRIBUTING.md` and `README.md`.
+- `.pre-commit-config.yaml`, because its TypeScript hooks must keep running the commands these jobs run.
 
 | Job | Does |
 |---|---|
@@ -480,9 +515,16 @@ All of these go in one `docs:` commit after the `typescript/` work, as the brief
   - Any `-m` on a line mentioning `pytest` or `hatch run test` must be a registered marker.
   - Every `MONGODB_*` and `STRANDS_MONGODB_*` variable must be a Python gate. The TS tiers reuse those exact names for this reason.
   - Any `TODO(...)` fails unless it is declared open. The section has none.
-- **`CONTRIBUTING.md`** gains TypeScript setup and the `ci-typescript.yml` job table. `test_the_documented_gates_are_the_workflow_jobs` reads every table row in that file whose first cell is a backticked name starting with a capital as a claimed `ci-python.yml` job, so the TS job names in that table would fail it. **Choice:** the TS job table goes in `typescript/README.md`, and CONTRIBUTING gets a paragraph that points there. The test sees no new row, and the process document still says where the gates are.
-- **`README.md`** changes its layout table to list `typescript/`, and the sentence "A `typescript/` sibling publishing the same name to npm may follow" becomes a link.
-- **`.gitignore`** at the root is not touched. `typescript/.gitignore` carries `node_modules/`, and the root already ignores `dist/` and `.env`. `node_modules` is already outside the Python Markdown sweep.
+- **`CONTRIBUTING.md`** gains TypeScript setup and the `ci-typescript.yml` job table. `test_the_documented_gates_are_the_workflow_jobs` reads every table row in that file whose first cell is a backticked name starting with a capital as a claimed `ci-python.yml` job, so the TS job names in that table would fail it. **Choice:** the TS job table goes in `typescript/README.md`, and CONTRIBUTING gets a paragraph that points there. The test sees no new row, and the process document still says where the gates are. Its pre-commit paragraph names only the Python hooks, so it gains a sentence for the TypeScript ones (§9).
+- **`README.md`** changes its layout table to list `typescript/`, and the sentence "A `typescript/` sibling publishing the same name to npm may follow" becomes a link. As of `python-v1.0.0` the landing page has no Status, Erasing or requirements-table sections: Requirements is one line, "Python 3.10 or newer", linking to `python/README.md#requirements`. It gains a matching line for Node.js 22 or newer that links to the TS README's requirements section. Nothing else is repeated there, and Python's AT-161 (which held the old status block to the package) is gone.
+- **`.gitignore`** at the root is not touched. `typescript/.gitignore` carries `node_modules/`, the root already ignores `dist/`, `.env` and `.claude/`, and `node_modules` is already outside the Python Markdown sweep.
+
+**`typescript/README.md` is the npm package page**, as `python/README.md` is the PyPI description. A relative
+link resolves against npmjs.com there and breaks. Python's README switched to absolute
+`https://github.com/mongodb/strands-mongodb/...` links for this reason, and `test_readme.py`'s
+`test_the_reference_links_only_to_absolute_urls` enforces it. The TS README follows the same rule (in-page
+`#anchors` allowed), and the README tests at M10 include the same check, under a `TS-` id because AT-093 is
+not a checklist item (§5.8).
 
 Each of those three Markdown files is in `ci-python.yml`'s `paths`, so the final commit also runs the Python suite in CI. That is intended.
 
@@ -505,7 +547,7 @@ This section is for the session that builds what §1–§11 describe. It assumes
 These come from the ticket brief (`.claude/NODE-7997-brief.md`, untracked), the owner's global instructions,
 and `AGENTS.md`. Breaking any of them is a defect, however good the code.
 
-- Work in `~/src/strands-mongodb-ts` on branch `NODE-7997-typescript`. Never touch the sibling directory `~/src/strands-mongodb` or its branch `INTPYTHON-1170-SSDLC`.
+- Work in `~/src/strands-mongodb-ts`, a git worktree of `~/src/strands-mongodb`, on branch `NODE-7997-typescript`. Never touch the main checkout at `~/src/strands-mongodb` or its branch. The branch is rebased on `main` at `python-v1.0.0` (`655c35c`), the Python GA release, which is the reference this port targets.
 - **Never `git push` and never open a pull request.** Ask the owner.
 - Sign off every commit with `git commit -s`. Never add a `Co-authored-by` trailer for the agent.
 - Use conventional commit subjects: `feat:`, `fix:`, `test:`, `refactor:`, `chore:`, `docs:`, `ci:`. Commit often, after each milestone in §12.4 at the latest.
@@ -547,7 +589,18 @@ the stages it builds, install it into a throwaway virtualenv in your scratch dir
 
 ### 12.3 Port map
 
-Line numbers are as of `main` at `0de7b9f`.
+Line numbers are as of `main` at `0de7b9f`. They still hold at `python-v1.0.0`: nothing under `python/src`
+changed between the two.
+
+Three Python tests did change between them, and the TS ports follow the new versions:
+- `test_indexes.py`: the contract check of what `listSearchIndexes` returns no longer requires `type`, because not
+  every deployment sends it (INTPYTHON-1182). The required set is `name`, `status`, `queryable` and
+  `latestDefinition`, which is all the unit fake programs. The TS contract test in M5 requires no more.
+- `test_memory_store.py`: the test that compares `auto`'s tier set with an explicit store's now waits for
+  the reference store's index builds (`_settled`) instead of only calling `initialize()`, because `auto`
+  does not wait for a build. The M9 contract test does the same, or it is flaky on a fresh collection.
+- `test_readme.py`: `MongoDBStorage.search()` joined the methods the README must trace. The TS README-coverage
+  test at M10 includes it.
 
 | TS file | Ports | Behaviour and ids from |
 |---|---|---|
@@ -574,7 +627,7 @@ These Python test files have no TS counterpart:
 - `test_migration.py`: it covers `python/MIGRATION.md`.
 - `test_ci.py`, `test_release_ci.py` and `test_atlas_ci_cluster.py`: they cover Python's workflows.
 
-The TS suite gets one CI test of its own instead. It asserts that `ci-typescript.yml`'s `paths` cover every file outside `typescript/` that a TS test reads: today `python/README.md` and `python/tests/test_gate.py`.
+The TS suite gets one CI test of its own instead. It asserts that `ci-typescript.yml`'s `paths` cover every file outside `typescript/` that a TS test reads: today `python/README.md` and `python/tests/test_gate.py`. It also asserts the two workflow rules in §9 that no Python test checks for this file: every `uses:` is a 40-character digest, and every job with `services:` runs on `ubuntu-22.04`.
 
 A Python test about something Python-only, such as event loops, the `cast` around `add_messages` or mypy, gets no TS
 copy. Don't reuse its id for something else.
@@ -595,7 +648,7 @@ The work splits into thirteen milestones, M0 to M12, done in order. A new sessio
 | M7 | `vector-search.ts` | `feat: add MongoDBVectorSearchStrategy` |
 | M8 | `filter.ts`, `pipeline.ts` | `feat: add filter validation and search pipelines` |
 | M9 | `memory-store.ts`, unit, contract and integration tiers. Gate items 16–19 pass | `feat: add MongoDBMemoryStore` |
-| M10 | `typescript/README.md`, `examples/`, the conventions test, the README-coverage tests, the build tier, and `.github/workflows/ci-typescript.yml` | `docs:` for the README and `ci:` for the workflow, as separate commits |
+| M10 | `typescript/README.md`, `examples/`, the conventions test, the README-coverage tests, the build tier, and `.github/workflows/ci-typescript.yml` with its `.github/zizmor.yml` entry and `.pre-commit-config.yaml` hooks (§9) | `docs:` for the README and `ci:` for the workflow, as separate commits |
 | M11 | The shared-file commit (§10): `AGENTS.md`, `CONTRIBUTING.md`, `README.md`. Run the Python checks in §12.5 first | `docs: describe the TypeScript package in the shared documents` |
 | M12 | Run the autoembed tier (§9, §12.5). Then stop and report to the owner: what is done, the verification output, and what was deferred. **Do not push.** | none |
 
@@ -641,7 +694,8 @@ The work is done when all of these hold:
 - The contract, integration and gate projects pass against local deployments.
 - The build tier passes with `STRANDS_MONGODB_BUILD_TIER=1`.
 - The Python checks above pass, apart from the known failure.
-- `git status` shows nothing but `.claude/`.
+- `pre-commit run --all-files` passes from the repository root, if `pre-commit` is installed.
+- `git status` is clean. The root `.gitignore` ignores `.claude/`.
 
 ### 12.6 Traps
 
@@ -660,3 +714,7 @@ The work is done when all of these hold:
 - **`addMessages` must stay absent** from `MongoDBMemoryStore`. If it is present, the SDK sends raw messages and skips extraction (§4, checklist item 20).
 - **The release gate reads only the leading ids of a title.** `it('AT-021 — ...')` counts, and `it('reads ... (AT-021)')` does not.
 - **The `paths` filter of `ci-typescript.yml`** must list every file outside `typescript/` that a TS test reads. A test enforces this, so adding such a read means extending the filter.
+- **`ci-typescript.yml` is scanned by zizmor** (§9). A tag in a `uses:` line, a checkout without
+  `persist-credentials: false`, or an unused permission fails the scan, which no TS test runs locally.
+- **`ubuntu-latest` cannot start MongoDB 8.x** (§9). A job with a MongoDB service container runs on `ubuntu-22.04`.
+- **Relative links in `typescript/README.md` break on npmjs.com** (§10). Use absolute GitHub URLs.
