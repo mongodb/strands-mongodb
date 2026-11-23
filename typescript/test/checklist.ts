@@ -229,7 +229,7 @@ const ORDER: readonly Milestone[] = ['M2', 'M4', 'M5', 'M6', 'M7', 'M8', 'M9']
  * Resolution of ids to tests is enforced for every item landing at or before this milestone. M10 sets it to
  * `'M9'`, and a conventions test then fails if it is ever lower, so the finished gate checks all 29 items.
  */
-export const LANDED_THROUGH: Milestone | 'M1' = 'M2'
+export const LANDED_THROUGH: Milestone | 'M1' = 'M4'
 
 /** Whether an item's tests are expected to exist by {@link LANDED_THROUGH}. */
 export function isDue(item: ChecklistItem): boolean {
