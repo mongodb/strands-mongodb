@@ -20,7 +20,13 @@ import { StorageError } from '@strands-agents/sdk'
 import { AggregationCursor, Collection, Db, MongoClient } from 'mongodb'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { SearchIndexNotReady, ensure, rankFusionSupport, searchSupport } from '../../src/index-lifecycle.js'
+import {
+  SearchIndexNotReady,
+  ensure,
+  rankFusionSupport,
+  readCollation,
+  searchSupport,
+} from '../../src/index-lifecycle.js'
 import { IndexSpec, type SearchIndexSpec, memorySearchSpecs, memorySpecs, storageSpecs } from '../../src/indexes.js'
 import { configureLogging, logger } from '../../src/telemetry.js'
 import { POLL_INTERVAL_MS, READY_TIMEOUT_MS } from '../../src/types.js'
@@ -32,6 +38,7 @@ import {
   searchStates,
   serverError,
 } from '../support/fake-indexes.js'
+import { FakeStorageDatabase } from '../support/fake-storage.js'
 import { children, exportedSpans, named, one } from '../support/spans.js'
 
 /** One log call a recording logger received: the level, the fields and the message. */
@@ -938,9 +945,19 @@ describe('TS-057 — indexes.ensure, indexes.probe and indexes.wait are one span
     const collection = new FakeCollection()
     await underParent(() => searchSupport(collection.collection))
     await underParent(() => rankFusionSupport(new FakeDatabase().db, collection.collection))
+    const storage = new FakeStorageDatabase()
+    await underParent(() => readCollation(storage.db, storage.collection('memory').collection))
     const probes = named(spans, 'parent').map((parent) => children(spans, parent, 'strands_mongodb.indexes.probe')[0])
-    expect(probes.map((probe) => probe?.attributes['strands_mongodb.indexes.probe'])).toEqual(['search', 'rank_fusion'])
-    expect(probes.map((probe) => probe?.attributes['strands_mongodb.collection'])).toEqual(['memory', 'memory'])
+    expect(probes.map((probe) => probe?.attributes['strands_mongodb.indexes.probe'])).toEqual([
+      'search',
+      'rank_fusion',
+      'collation',
+    ])
+    expect(probes.map((probe) => probe?.attributes['strands_mongodb.collection'])).toEqual([
+      'memory',
+      'memory',
+      'memory',
+    ])
   })
 
   it('TS-057 — a wait is one span however many polls it takes', async () => {

@@ -34,6 +34,12 @@ export interface Connection {
   readonly client: MongoClient
   /** True when this package built the client and so may close it. An injected client is the caller's. */
   readonly owned: boolean
+  /**
+   * `<database>.<collection>` namespaces whose default collation was read and found binary. On the
+   * connection rather than the store, so a namespace or a second store on the same collection does not ask
+   * again. Only a collection that exists is added: an absent one can still be created with a collation.
+   */
+  readonly binaryKeys: Set<string>
 }
 
 /**
@@ -98,13 +104,13 @@ export function resolve(config: MongoDBConfig, owner: Owner): Connection {
       config.client.appendMetadata({ name: DRIVER_NAME, version: VERSION })
       ATTRIBUTED.add(config.client)
     }
-    return register(key, { client: config.client, owned: false })
+    return register(key, { client: config.client, owned: false, binaryKeys: new Set() })
   }
   const client = new MongoClient(config.connectionString as string, {
     ...config.clientOptions,
     driverInfo: { name: DRIVER_NAME, version: VERSION },
   })
-  return register(key, { client, owned: true })
+  return register(key, { client, owned: true, binaryKeys: new Set() })
 }
 
 /**

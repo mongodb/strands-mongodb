@@ -2,9 +2,9 @@
  * Driver failures become the SDK's `StorageError`, with the driver error as its `cause`.
  *
  * Ports the two `_reporting` decorators in `python/src/strands_mongodb/storage.py` and `memory_store.py` on
- * their own. The per-operation half, every `MongoDBStorage` entry point raising `StorageError` (AT-022,
- * AT-036), lands with the store in M6, so these lead with `TS-` ids and checklist item 14 stays open until
- * then.
+ * their own, so these lead with `TS-` ids. The per-operation half, every `MongoDBStorage` entry point
+ * raising `StorageError` (AT-022, AT-036), is in `test/unit/storage.test.ts`. Checklist item 14 also needs
+ * the memory store's half, AT-080, and closes in M9.
  *
  * Mock-driven, as Python's are: a transport failure is not something a healthy deployment produces on cue.
  */

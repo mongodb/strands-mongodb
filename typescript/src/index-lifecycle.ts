@@ -3,8 +3,8 @@
  *
  * Ported from the second half of `python/src/strands_mongodb/_indexes.py`: `ensure`, `search_support` and
  * `rank_fusion_support`, with the containment rule that decides whether a reported search definition covers
- * the declared one. `require_binary_comparison` and `read_collation` arrive with the storage surface that
- * calls them.
+ * the declared one, and `read_collation` and `require_binary_comparison`, which `MongoDBStorage` runs before
+ * it trusts a collection with its keys.
  *
  * Messages keep Python's `strands_mongodb: ` prefix rather than a class name. This module is shared by both
  * stores and does not know which one called it, and the commands in the messages are byte for byte the
@@ -130,6 +130,78 @@ export function rankFusionSupport(db: Db, collection: Collection): Promise<boole
     const major: unknown = version[0]
     return typeof major === 'number' && Number.isInteger(major) && major >= RANK_FUSION_MIN_MAJOR
   })
+}
+
+/**
+ * What `listCollections` says about one collection's string comparison.
+ *
+ * An absent collection and an uncollated one both have no collation, but only the second is verified.
+ */
+export interface CollationReport {
+  /** Whether the server reported the collection at all. */
+  readonly exists: boolean
+  /** The collation document it reported, or `undefined` if there was none, or no collection. */
+  readonly collation?: Document
+}
+
+/**
+ * Report whether the collection exists and what default collation it carries.
+ *
+ * Uses `listCollections` filtered to this name, so a shared database's other collections are not listed.
+ * The server reports a collation under `options.collation` and does not store a simple one: a collection
+ * created with `{locale: 'simple'}` reports empty `options`.
+ *
+ * @param db - The collection's database, which `listCollections` is sent to. The driver's `Collection` has
+ *   no public accessor for it.
+ * @param collection - The collection to ask about. Need not exist.
+ * @returns `{exists: false}` for an absent collection, `{exists: true}` with no collation for one without.
+ * @throws StorageError when the call fails, with the driver's error as the cause. An absent collection is
+ *   not a failure.
+ */
+export function readCollation(db: Db, collection: Collection): Promise<CollationReport> {
+  return span('strands_mongodb.indexes.probe', probeAttributes(collection, 'collation'), async () => {
+    try {
+      for await (const document of db.listCollections({ name: collection.collectionName })) {
+        // Typed as possibly name-only, though without `nameOnly` the server sends the options.
+        const collation: unknown = 'options' in document ? (document.options as Document)?.collation : undefined
+        return collation === undefined || collation === null
+          ? { exists: true }
+          : { exists: true, collation: collation as Document }
+      }
+    } catch (error) {
+      if (!(error instanceof MongoError)) throw error
+      throw new StorageError(
+        `strands_mongodb: reading the collation of ${namespaceOf(collection)} failed: ${error.message}`,
+        { cause: error },
+      )
+    }
+    return { exists: false }
+  })
+}
+
+/**
+ * Refuse a collection whose default collation is not binary, and say whether it verified one.
+ *
+ * An isolation check. Keys live in `_id`, and key equality, prefix ranges and `_id` uniqueness all use the
+ * collection's default collation. Under a case-folding one, a namespace can read and delete another's
+ * documents, and keys differing only in case collide. A per-query `{locale: 'simple'}` is no fix: such
+ * queries cannot use the `_id` index, and `_id` uniqueness would stay folded.
+ *
+ * An absent collection passes, since this package creates collections implicitly without a collation, but it
+ * is not verified: someone may create it a moment later with any collation.
+ *
+ * @param db - The collection's database.
+ * @param collection - The collection about to be operated on.
+ * @returns `true` if the collection exists and compares strings byte by byte, an answer worth caching.
+ *   `false` if it does not exist yet, which must not be cached.
+ * @throws StorageError when the collection has a collation whose locale is not `SIMPLE_LOCALE`, naming the
+ *   locale found and the remedy, or when reading the collation fails, with the driver's error as the cause.
+ */
+export async function requireBinaryComparison(db: Db, collection: Collection): Promise<boolean> {
+  const report = await readCollation(db, collection)
+  const collation = report.collation
+  if (collation === undefined || collation.locale === SIMPLE_LOCALE) return report.exists
+  throw new StorageError(NOT_BINARY(namespaceOf(collection), collection.collectionName, collation))
 }
 
 /**
@@ -505,6 +577,22 @@ function probeAttributes(collection: Collection, probe: 'search' | 'rank_fusion'
 function keysOf(spec: IndexSpec): string {
   return pythonJson(spec.keys.map(([field, direction]) => [field, direction]))
 }
+
+/**
+ * A collection whose collation folds keys together. Python's wording, except that the remedy names the
+ * `collection` option where Python names an argument, and the reported collation is JSON where Python
+ * prints a dict.
+ */
+const NOT_BINARY = (namespace: string, name: string, collation: Document): string =>
+  `strands_mongodb: the collection ${namespace} was created with the collation ${repr(String(collation.locale))}, ` +
+  'and this package cannot store keys in a collection whose string comparison is not binary. Keys live in ' +
+  "'_id': a read is an equality match on it, a prefix listing is a range over it, and a namespace is part " +
+  "of it, so a collation that folds case or accents lets one namespace read and delete another's documents, " +
+  "and makes two keys differing only in case collide on the unique '_id' index. A collation cannot be " +
+  "changed in place. Point this store at a collection created without one -- the 'collection' option -- or " +
+  `recreate this one with db.createCollection(${repr(name)}) and no collation, or with ` +
+  `{collation: {locale: ${repr(SIMPLE_LOCALE)}}}, which is binary comparison stated explicitly. ` +
+  `Reported: ${JSON.stringify(collation)}.`
 
 /** The search probe answered with a code that does not mean "no search", so it is not read as one. */
 const PROBE_FAILED = (namespace: string, error: MongoError): string =>

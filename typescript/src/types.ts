@@ -13,6 +13,8 @@ import type { MemoryStoreConfig } from '@strands-agents/sdk'
 import type { Embedder, SearchStrategy } from '@strands-agents/sdk/storage/search'
 import type { MongoClient, MongoClientOptions } from 'mongodb'
 
+import type { MongoDBStorage } from './storage.js'
+
 /**
  * Search tiers a caller may ask for.
  *
@@ -140,8 +142,11 @@ export interface MongoDBStorageOptions {
   prefix?: string
   /** How long a written value lives, in seconds from the write. Absent means no expiry. */
   ttlSeconds?: number
-  /** What `search` runs instead of the default key-only scan. */
-  searchStrategy?: SearchStrategy
+  /**
+   * What `search` runs instead of the default key-only scan. Typed over `MongoDBStorage`, as Python's is, so
+   * a strategy that needs this store's collection fits, and the SDK's strategies over any `Storage` still do.
+   */
+  searchStrategy?: SearchStrategy<MongoDBStorage>
 }
 
 /**

@@ -24,5 +24,6 @@ export {
   RESERVED_METADATA_KEYS,
   UNSCOPED,
 } from './types.js'
+export { MongoDBStorage } from './storage.js'
 export { configureLogging } from './telemetry.js'
 export { VERSION } from './version.js'
