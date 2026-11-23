@@ -25,5 +25,7 @@ export {
   UNSCOPED,
 } from './types.js'
 export { MongoDBStorage } from './storage.js'
+export { DEFAULT_STORAGE_VECTOR_INDEX_NAME, MongoDBVectorSearchStrategy } from './vector-search.js'
+export type { MongoDBVectorSearchStrategyOptions } from './vector-search.js'
 export { configureLogging } from './telemetry.js'
 export { VERSION } from './version.js'

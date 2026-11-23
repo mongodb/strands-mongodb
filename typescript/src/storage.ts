@@ -20,7 +20,7 @@ import { StorageError } from '@strands-agents/sdk'
 import type { Storage } from '@strands-agents/sdk'
 import type { SearchStrategy, StorageSearchResult } from '@strands-agents/sdk/storage/search'
 import { Binary, MongoError } from 'mongodb'
-import type { Collection, Db, Document, Filter } from 'mongodb'
+import type { Collection, Db, Document, Double, Filter } from 'mongodb'
 
 import { close, resolve, type Connection } from './client.js'
 import { reportingStorage } from './errors.js'
@@ -46,14 +46,27 @@ const NAMESPACED = Symbol.for('strands.storage.namespaced')
 const TOKEN_PATTERN = '[\\p{L}\\p{N}_]+'
 
 /** One stored key, as this package writes it. */
-interface StoredDocument {
+export interface StoredDocument {
   _id: string
   /** Written as a `Uint8Array`; read back as a `Binary`. */
   data: Uint8Array | Binary
   updated_at: Date
   /** Present only when the store has a TTL. */
   expires_at?: Date
+  /** The value's vector, set only by `MongoDBVectorSearchStrategy`. */
+  embedding?: Double[]
+  /** Every `/`-terminated ancestor of `_id`, set only by `MongoDBVectorSearchStrategy`. */
+  prefixes?: string[]
 }
+
+/**
+ * The collection a store's data calls run on, resolved per call as the store's own methods resolve it.
+ *
+ * For `MongoDBVectorSearchStrategy`, which reads and writes the same documents. Python's strategy calls the
+ * store's private `_collection()`; a `#` field cannot be reached from another module, so the class hands this
+ * function out from a static block instead. Not exported from the entry point.
+ */
+export let storageCollection: (storage: MongoDBStorage) => Collection<StoredDocument>
 
 /** A strategy that also declares the search index it needs, such as the vector strategy. Duck-typed, as Python's `getattr`. */
 interface WithIndexSpec {
@@ -89,6 +102,10 @@ export class MongoDBStorage implements Storage {
   readonly #ttlSeconds: number | undefined
   readonly #strategy: SearchStrategy<MongoDBStorage> | undefined
   readonly #indexReadyTimeoutMs: number
+
+  static {
+    storageCollection = (storage) => storage.#resolve().collection
+  }
 
   /**
    * Create a store over one collection. No I/O: the first operation connects.

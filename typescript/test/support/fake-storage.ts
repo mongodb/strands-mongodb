@@ -62,6 +62,23 @@ export class FakeStorageCollection {
     return { acknowledged: true }
   }
 
+  /**
+   * Apply a `$set` to the document matching `_id`, and only while every other field in the filter equals the
+   * stored one, bytes compared as bytes. That is the guard the vector strategy relies on.
+   */
+  async updateOne(filter: Document, update: Document): Promise<{ matchedCount: number }> {
+    this.record('updateOne', filter, update)
+    let matched = 0
+    for (const document of this.matching(filter)) {
+      const others = Object.entries(filter).filter(([field]) => field !== '_id')
+      if (others.every(([field, value]) => sameValue(document[field], value))) {
+        Object.assign(document, structuredClone((update.$set ?? {}) as Document))
+        matched += 1
+      }
+    }
+    return { matchedCount: matched }
+  }
+
   async findOne(filter: Document): Promise<Document | null> {
     this.record('findOne', filter)
     return this.matching(filter)[0] ?? null
@@ -193,4 +210,12 @@ export class FakeStorageDatabase {
     db: () => this,
     close: async () => {},
   } as unknown as MongoClient
+}
+
+/** Equality as the server would apply it to a filter value: byte arrays by content, anything else strictly. */
+function sameValue(stored: unknown, wanted: unknown): boolean {
+  if (stored instanceof Uint8Array && wanted instanceof Uint8Array) {
+    return stored.length === wanted.length && stored.every((byte, index) => byte === wanted[index])
+  }
+  return stored === wanted
 }

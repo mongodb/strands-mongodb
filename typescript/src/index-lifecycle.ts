@@ -19,7 +19,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { isDeepStrictEqual } from 'node:util'
 
 import { StorageError } from '@strands-agents/sdk'
-import { MongoError, MongoServerError } from 'mongodb'
+import { Double, MongoError, MongoServerError } from 'mongodb'
 import type { Collection, Db, Document } from 'mongodb'
 
 import { type IndexSpec, type SearchIndexSpec, dropIndexCommand, pythonJson, readiness, repr } from './indexes.js'
@@ -558,6 +558,36 @@ function serverCode(error: MongoError): number | undefined {
   return error instanceof MongoServerError && typeof error.code === 'number' ? error.code : undefined
 }
 
+/** Anything with an async `embed(text)`, such as the SDK's `Embedder`. */
+export interface TextEmbedder {
+  embed(text: string): Promise<readonly number[]>
+}
+
+/**
+ * Embed `text` and check the vector's length against the index definition.
+ *
+ * The server rejects a wrong length on a query but silently leaves a written one out of the index. Each
+ * component becomes a BSON `Double`, as Python's `float()` makes it one: the driver would otherwise encode an
+ * integer-valued number as an int32, and a vector written here would not be the vector Python writes.
+ *
+ * @param embedder - What embeds the text.
+ * @param text - The text to embed.
+ * @param dimensions - The length the index declares.
+ * @param setting - The name of the option that set `dimensions`, for the message.
+ * @returns The vector, one `Double` per component.
+ * @throws RangeError when the vector's length is not `dimensions`.
+ */
+export async function embed(
+  embedder: TextEmbedder,
+  text: string,
+  dimensions: number,
+  setting: string,
+): Promise<Double[]> {
+  const vector = Array.from(await embedder.embed(text), (value) => new Double(Number(value)))
+  if (vector.length !== dimensions) throw new RangeError(WRONG_LENGTH(vector.length, setting, dimensions))
+  return vector
+}
+
 /** `<database>.<collection>`. */
 function namespaceOf(collection: Collection): string {
   return `${collection.dbName}.${collection.collectionName}`
@@ -593,6 +623,11 @@ const NOT_BINARY = (namespace: string, name: string, collation: Document): strin
   `recreate this one with db.createCollection(${repr(name)}) and no collation, or with ` +
   `{collation: {locale: ${repr(SIMPLE_LOCALE)}}}, which is binary comparison stated explicitly. ` +
   `Reported: ${JSON.stringify(collation)}.`
+
+/** An embedder whose vectors do not fit the index. Python's wording, with the option camelCased by the caller. */
+const WRONG_LENGTH = (length: number, setting: string, dimensions: number): string =>
+  `strands_mongodb: the embedder returned a ${length}-dimension vector and ${repr(setting)} is ${dimensions}. ` +
+  `Set ${repr(setting)} to the length the embedding model produces.`
 
 /** The search probe answered with a code that does not mean "no search", so it is not read as one. */
 const PROBE_FAILED = (namespace: string, error: MongoError): string =>

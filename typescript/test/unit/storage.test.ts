@@ -1003,6 +1003,7 @@ describe('TS-081 — the fake matches the driver', () => {
   it('TS-081 — every collection method the store calls exists on the real class', () => {
     for (const name of [
       'replaceOne',
+      'updateOne',
       'findOne',
       'deleteOne',
       'deleteMany',
