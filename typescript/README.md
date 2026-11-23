@@ -923,6 +923,25 @@ Each test writes to a database named `strands_mongodb_test_<random>` and drops i
 `MONGODB_URI` at a deployment you care about keeps the tests out of its existing databases, but is still not
 recommended.
 
+### Continuous integration
+
+`.github/workflows/ci-typescript.yml` runs on every pull request that touches `typescript/`, or one of the files
+outside it the suite reads, and on demand. No job holds a secret: the deployments are service containers. Each job
+installs npm 11.21.3 before `npm ci`, because older npm 11 releases leave out Vitest's native binding on a clean
+install and the suite cannot start. Use that version or newer locally too.
+
+<!-- ci-jobs -->
+
+| Job                            | Runs                                                                                                                                                                                                                                                         |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Lint`                         | `npm run format:check`, `npm run lint`, `npm run typecheck`, on Node 22                                                                                                                                                                                      |
+| `Test - Node <version>`        | `npm test` on Node 22 and 24, with no deployment: the unit and gate tiers, and the examples' refusal and dry-run checks                                                                                                                                      |
+| `Contract tier (<deployment>)` | The `contract` and `example` tiers against a `mongo:8` service container and against a `mongodb/mongodb-atlas-local:8` one that carries a search process. The second leg also runs `integration`, then both check that the tiers left the working tree clean |
+| `Coverage floors`              | `npm run cov` with `STRANDS_MONGODB_BUILD_TIER=1`: 90% aggregate and 70% per file, and the build tier's pack, install and import                                                                                                                             |
+
+The `autoembed` tier is not run by this workflow, because it needs a real Atlas cluster and a credential to create
+one. Run it locally with `MONGODB_AUTOEMBED_URI` set.
+
 ## License
 
 Apache-2.0. See [LICENSE](https://github.com/mongodb/strands-mongodb/blob/main/typescript/LICENSE).

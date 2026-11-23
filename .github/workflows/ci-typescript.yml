@@ -1,0 +1,245 @@
+name: CI - TypeScript
+
+# Four gates on a change to the TypeScript package. typescript/test/unit/ci.test.ts reads this file as YAML and
+# checks its structure, and the README's `ci-jobs` table names every job here.
+#
+# The contract and integration tiers run against service containers, so no job needs a secret. The autoembed
+# tier needs a real Atlas cluster and is not run here: ci-python.yml's `Atlas tiers` job holds the only cluster
+# credential in the repository, and this workflow does not ask for it.
+
+on:
+  pull_request:
+    # No `branches:` filter, deliberately. A pull request stacked on another topic branch would otherwise run no
+    # gate job, and when its base merges GitHub retargets it with an `edited` event this workflow does not receive.
+    paths:
+      # The package, this workflow and its exception file, and every file outside typescript/ the suite reads:
+      # the Python README for the index commands and Python's telemetry module for the log events. A change that
+      # touches only an unlisted file runs no job, which looks the same as passing.
+      - 'typescript/**'
+      - '.github/workflows/ci-typescript.yml'
+      - '.github/workflows/zizmor.yml'
+      - '.github/zizmor.yml'
+      - '.pre-commit-config.yaml'
+      - '.gitignore'
+      - 'python/README.md'
+      - 'python/src/strands_mongodb/_telemetry.py'
+  push:
+    # Push keeps a branch filter: a topic branch is already graded by its pull request.
+    branches: [ main ]
+    paths:
+      - 'typescript/**'
+      - '.github/workflows/ci-typescript.yml'
+      - '.github/workflows/zizmor.yml'
+      - '.github/zizmor.yml'
+      - '.pre-commit-config.yaml'
+      - '.gitignore'
+      - 'python/README.md'
+      - 'python/src/strands_mongodb/_telemetry.py'
+  # On demand, so a maintainer can grade a commit without pushing to it. Dispatch needs write access.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # As in ci-python.yml: pull requests key on their number and everything else on the run id, so a push to
+  # main is never cancelled by another event on the same ref.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    working-directory: typescript
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # Every action in this workflow is pinned to a commit digest, so it needs no `unpinned-uses` exception in
+      # .github/zizmor.yml. Dependabot's github-actions entry keeps the digests current.
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # Otherwise the job's token stays in `.git/config`, readable by every later step. Nothing here pushes.
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          # The floor `engines` declares, so the type check sees the oldest Node a user can have.
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: typescript/package-lock.json
+
+      # Pinned. npm 11.5.1 leaves out Vitest's native binding on a clean `npm ci` and the suite cannot start;
+      # 11.21.3 installs it. A test requires this step, with this version, before every `npm ci`.
+      - name: Install a pinned npm
+        run: npm install --global npm@11.21.3
+
+      - name: Install dependencies
+        run: npm ci
+
+      # format:check, not format. `npm run format` is `prettier --write`, which rewrites the checkout and exits 0.
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Run linter
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+  test:
+    name: Test - Node ${{ matrix.node-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        # Quoted, so a version is never read as a number. 22 is the `engines` floor; 24 is the current release.
+        node-version: ['22', '24']
+      fail-fast: false
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: typescript/package-lock.json
+
+      - name: Install a pinned npm
+        run: npm install --global npm@11.21.3
+
+      - name: Install dependencies
+        run: npm ci
+
+      # No tier variable is set, so the tiers that need a deployment skip and name the variable. The example
+      # tier's refusal and dry-run checks need none, and run, as does the release gate.
+      - name: Run tests
+        run: npm test
+
+  contract:
+    name: Contract tier (${{ matrix.deployment.label }})
+    # Not ubuntu-latest: from runner image 20261025 its kernel is 6.19 or newer, where MongoDB 8.x refuses to
+    # start (log id 12257600, SERVER-125742). ubuntu-22.04 runs kernel 6.8. Move back once MongoDB lifts the guard.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    # Two deployments, because `mongo:8` has no search process and the Atlas local image does, so the tests that
+    # branch on what the deployment answers cover both sides only across the two.
+    strategy:
+      fail-fast: false
+      matrix:
+        deployment:
+          - label: mongod alone
+            image: mongo:8
+            health: "mongosh --quiet --eval 'db.adminCommand({ping:1})'"
+            uri: mongodb://localhost:27017
+            search: ''
+          - label: with a search process
+            image: mongodb/mongodb-atlas-local:8
+            # The image's own health check rather than a ping, which answers before mongot is up.
+            health: /usr/local/bin/runner healthcheck
+            # A single-node replica set whose member host is the container's hostname, which the runner cannot
+            # resolve. Without `directConnection=true` every operation times out in server selection.
+            uri: mongodb://localhost:27017/?directConnection=true
+            search: '1'
+
+    services:
+      mongodb:
+        image: ${{ matrix.deployment.image }}
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "${{ matrix.deployment.health }}"
+          --health-interval 10s
+          --health-timeout 60s
+          --health-retries 20
+
+    # Under env: rather than on the command line, the rule for every connection string, secret or not.
+    env:
+      MONGODB_URI: ${{ matrix.deployment.uri }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: typescript/package-lock.json
+
+      - name: Install a pinned npm
+        run: npm install --global npm@11.21.3
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The example tier too: the storage example runs against this deployment in two processes.
+      - name: Run the contract tier
+        run: npm test -- --project contract --project example
+
+      # mongot is only in the Atlas local image, so the integration tier runs on that leg.
+      - name: Run the integration tier
+        if: matrix.deployment.search == '1'
+        env:
+          MONGODB_ATLAS_URI: ${{ matrix.deployment.uri }}
+        run: npm test -- --project integration
+
+      # Anything the run left that git can see is either missing from `.gitignore` or an example or a README
+      # snippet writing into the working tree.
+      - name: Assert the tiers left the working tree clean
+        run: |
+          dirty="$(git status --porcelain)"
+          if [ -n "$dirty" ]; then
+            echo "The tiers left files behind:"
+            echo "$dirty"
+            exit 1
+          fi
+
+  coverage:
+    name: Coverage floors
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # The build tier: packs the package, installs the tarball into an empty project and imports it. It needs the
+    # registry for the peer dependencies and nothing else. Here rather than in the matrix, because the tarball
+    # is the same on every Node release.
+    env:
+      STRANDS_MONGODB_BUILD_TIER: '1'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: typescript/package-lock.json
+
+      - name: Install a pinned npm
+        run: npm install --global npm@11.21.3
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The 90% aggregate and 70% per-file floors, met with no deployment. Not part of `npm test`, so this job is
+      # what enforces them.
+      - name: Enforce both coverage floors
+        run: npm run cov
