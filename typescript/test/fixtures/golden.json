@@ -512,5 +512,335 @@
       "input": "",
       "value": []
     }
+  ],
+  "pipelines": [
+    {
+      "name": "vector, autoEmbed",
+      "value": [
+        {
+          "$vectorSearch": {
+            "index": "v",
+            "path": "content",
+            "query": {
+              "text": "dark mode"
+            },
+            "numCandidates": 50,
+            "limit": 5,
+            "model": "voyage-4"
+          }
+        },
+        {
+          "$set": {
+            "score": {
+              "$meta": "vectorSearchScore"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "vector, autoEmbed, filtered",
+      "value": [
+        {
+          "$vectorSearch": {
+            "index": "v",
+            "path": "content",
+            "query": {
+              "text": "dark mode"
+            },
+            "numCandidates": 15,
+            "limit": 5,
+            "model": "voyage-4",
+            "filter": {
+              "$and": [
+                {
+                  "scope": "s"
+                },
+                {
+                  "metadata.tier": "gold"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "$set": {
+            "score": {
+              "$meta": "vectorSearchScore"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "vector, manual",
+      "value": [
+        {
+          "$vectorSearch": {
+            "index": "v",
+            "path": "embedding",
+            "queryVector": [
+              1.0,
+              0.5,
+              0.0,
+              0.0
+            ],
+            "numCandidates": 50,
+            "limit": 5
+          }
+        },
+        {
+          "$set": {
+            "score": {
+              "$meta": "vectorSearchScore"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "vector, manual, filtered, unscored",
+      "value": [
+        {
+          "$vectorSearch": {
+            "index": "v",
+            "path": "embedding",
+            "queryVector": [
+              1.0,
+              0.5,
+              0.0,
+              0.0
+            ],
+            "numCandidates": 50,
+            "limit": 5,
+            "filter": {
+              "$and": [
+                {
+                  "scope": "s"
+                },
+                {
+                  "metadata.tier": "gold"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "text",
+      "value": [
+        {
+          "$search": {
+            "index": "t",
+            "text": {
+              "query": "dark mode",
+              "path": "content"
+            }
+          }
+        },
+        {
+          "$set": {
+            "score": {
+              "$meta": "searchScore"
+            }
+          }
+        },
+        {
+          "$limit": 5
+        }
+      ]
+    },
+    {
+      "name": "text, filtered",
+      "value": [
+        {
+          "$search": {
+            "index": "t",
+            "text": {
+              "query": "dark mode",
+              "path": "content"
+            }
+          }
+        },
+        {
+          "$match": {
+            "$and": [
+              {
+                "scope": "s"
+              },
+              {
+                "metadata.tier": "gold"
+              }
+            ]
+          }
+        },
+        {
+          "$set": {
+            "score": {
+              "$meta": "searchScore"
+            }
+          }
+        },
+        {
+          "$limit": 5
+        }
+      ]
+    },
+    {
+      "name": "text, filtered, unscored",
+      "value": [
+        {
+          "$search": {
+            "index": "t",
+            "text": {
+              "query": "dark mode",
+              "path": "content"
+            }
+          }
+        },
+        {
+          "$match": {
+            "$and": [
+              {
+                "scope": "s"
+              },
+              {
+                "metadata.tier": "gold"
+              }
+            ]
+          }
+        },
+        {
+          "$limit": 5
+        }
+      ]
+    },
+    {
+      "name": "hybrid, autoEmbed, filtered",
+      "value": [
+        {
+          "$rankFusion": {
+            "input": {
+              "pipelines": {
+                "vector": [
+                  {
+                    "$vectorSearch": {
+                      "index": "v",
+                      "path": "content",
+                      "query": {
+                        "text": "dark mode"
+                      },
+                      "numCandidates": 50,
+                      "limit": 5,
+                      "model": "voyage-4",
+                      "filter": {
+                        "$and": [
+                          {
+                            "scope": "s"
+                          },
+                          {
+                            "metadata.tier": "gold"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ],
+                "text": [
+                  {
+                    "$search": {
+                      "index": "t",
+                      "text": {
+                        "query": "dark mode",
+                        "path": "content"
+                      }
+                    }
+                  },
+                  {
+                    "$match": {
+                      "$and": [
+                        {
+                          "scope": "s"
+                        },
+                        {
+                          "metadata.tier": "gold"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "$limit": 5
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "$set": {
+            "score": {
+              "$meta": "score"
+            }
+          }
+        },
+        {
+          "$limit": 5
+        }
+      ]
+    },
+    {
+      "name": "hybrid, manual",
+      "value": [
+        {
+          "$rankFusion": {
+            "input": {
+              "pipelines": {
+                "vector": [
+                  {
+                    "$vectorSearch": {
+                      "index": "v",
+                      "path": "embedding",
+                      "queryVector": [
+                        1.0,
+                        0.5,
+                        0.0,
+                        0.0
+                      ],
+                      "numCandidates": 10,
+                      "limit": 5
+                    }
+                  }
+                ],
+                "text": [
+                  {
+                    "$search": {
+                      "index": "t",
+                      "text": {
+                        "query": "dark mode",
+                        "path": "content"
+                      }
+                    }
+                  },
+                  {
+                    "$limit": 5
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "$set": {
+            "score": {
+              "$meta": "score"
+            }
+          }
+        },
+        {
+          "$limit": 5
+        }
+      ]
+    }
   ]
 }

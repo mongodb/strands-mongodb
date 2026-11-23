@@ -10,7 +10,7 @@ Run by hand, never in CI, from ``python/`` so Hatch supplies an environment with
     hatch run python -I ../typescript/scripts/golden.py
 
 Each milestone of the TypeScript port adds the sections its code needs: key handling and the tokenizer now,
-the document shapes and ``content_hash`` when the storage and memory modules land.
+the search pipelines with milestone 8, and the document shapes and ``content_hash`` with the memory store.
 """
 
 from __future__ import annotations
@@ -24,6 +24,8 @@ from strands.storage.search.keyword import tokenize
 from strands.storage.storage import _normalize_key, _normalize_prefix
 
 from strands_mongodb import MongoDBStorage
+from strands_mongodb._indexes import VectorMode
+from strands_mongodb._pipeline import hybrid_stages, text_stages, vector_stages
 from strands_mongodb.storage import _abbreviate, _encoded_size, _successor
 
 OUTPUT = Path(__file__).resolve().parent.parent / "test" / "fixtures" / "golden.json"
@@ -76,6 +78,58 @@ TOKENIZE = [
     "é",
     "tab\tnew\nline",
     "",
+]
+
+
+AUTO_EMBED = VectorMode(model="voyage-4")
+MANUAL = VectorMode(dimensions=4, similarity="cosine")
+FILTER = {"$and": [{"scope": "s"}, {"metadata.tier": "gold"}]}
+
+# One case per stage shape, so a difference in key order or nesting shows up as a failing case.
+PIPELINES: list[tuple[str, Any]] = [
+    ("vector, autoEmbed", lambda: vector_stages(mode=AUTO_EMBED, index_name="v", limit=5, query_text="dark mode")),
+    (
+        "vector, autoEmbed, filtered",
+        lambda: vector_stages(
+            mode=AUTO_EMBED, index_name="v", limit=5, query_text="dark mode", query_filter=FILTER, oversampling_factor=3
+        ),
+    ),
+    ("vector, manual", lambda: vector_stages(mode=MANUAL, index_name="v", limit=5, query_vector=[1.0, 0.5, 0.0, 0.0])),
+    (
+        "vector, manual, filtered, unscored",
+        lambda: vector_stages(
+            mode=MANUAL, index_name="v", limit=5, query_vector=[1.0, 0.5, 0.0, 0.0], query_filter=FILTER, score=False
+        ),
+    ),
+    ("text", lambda: text_stages(query_text="dark mode", index_name="t", limit=5)),
+    ("text, filtered", lambda: text_stages(query_text="dark mode", index_name="t", limit=5, query_filter=FILTER)),
+    (
+        "text, filtered, unscored",
+        lambda: text_stages(query_text="dark mode", index_name="t", limit=5, query_filter=FILTER, score=False),
+    ),
+    (
+        "hybrid, autoEmbed, filtered",
+        lambda: hybrid_stages(
+            mode=AUTO_EMBED,
+            vector_index_name="v",
+            text_index_name="t",
+            query_text="dark mode",
+            limit=5,
+            query_filter=FILTER,
+        ),
+    ),
+    (
+        "hybrid, manual",
+        lambda: hybrid_stages(
+            mode=MANUAL,
+            vector_index_name="v",
+            text_index_name="t",
+            query_text="dark mode",
+            query_vector=[1.0, 0.5, 0.0, 0.0],
+            limit=5,
+            oversampling_factor=2,
+        ),
+    ),
 ]
 
 
@@ -142,6 +196,7 @@ def main() -> None:
             for key, size, expires in ENCODED_SIZES
         ],
         "tokenize": [{"input": text, "value": sorted(tokenize(text))} for text in TOKENIZE],
+        "pipelines": [{"name": name, "value": build()} for name, build in PIPELINES],
     }
     OUTPUT.parent.mkdir(exist_ok=True)
     OUTPUT.write_text(json.dumps(golden, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
