@@ -2402,6 +2402,28 @@ class TestTheWorkflowsAreThemselvesScanned:
                 f"would not run on a change to the very files it reads"
             )
 
+    def test_every_action_in_every_workflow_is_pinned_to_a_digest(self) -> None:
+        """AT-244 -- a tag names a place its owner can move; a digest names the content that was reviewed.
+
+        Read from the parsed steps rather than grepped, so an action added later has to answer the
+        question too. Local actions (``./``) are this repository's own content and are skipped.
+        """
+        offenders: list[str] = []
+        checked = 0
+        for path in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
+            parsed = yaml.safe_load(path.read_text())
+            assert isinstance(parsed, dict), f"{path.name} did not parse as a mapping"
+            for job_name, job in (parsed.get("jobs") or {}).items():
+                uses_of_job = [job.get("uses")] + [step.get("uses") for step in job.get("steps") or []]
+                for uses in uses_of_job:
+                    if not isinstance(uses, str) or uses.startswith("./"):
+                        continue
+                    checked += 1
+                    if not _DIGEST.fullmatch(uses.rpartition("@")[2]):
+                        offenders.append(f"{path.name}:{job_name} {uses}")
+        assert checked >= 30, f"the walk found {checked} action references, and the workflows hold more than that"
+        assert offenders == [], f"these actions are pinned to a tag or a branch, which can be moved: {offenders}"
+
     def test_the_scan_is_pinned_to_a_digest(self, zizmor_workflow: dict[str, Any]) -> None:
         """AT-244 -- the analysis job holds the strictest version of the rule it enforces."""
         for job_name, job in (zizmor_workflow.get("jobs") or {}).items():

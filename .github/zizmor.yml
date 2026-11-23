@@ -16,21 +16,5 @@ rules:
       # The release workflow is the opposite case, and is digest-pinned throughout. A test asserts
       # that every action in a job holding `id-token: write` is pinned to a 40-character digest.
       - ci-python.yml
-  unpinned-uses:
-    ignore:
-      # The integration matrix's actions, referenced by version tag rather than commit digest.
-      #
-      # The rule is right that a tag is mutable and a compromised release would be picked up
-      # silently. The judgement is per job, and this file-level ignore covers only the jobs that
-      # receive nothing: they mint no token and publish nothing, so the worst a bad action version
-      # can do is lie about a test result. The release workflow, which signs and publishes, is
-      # digest-pinned throughout and has a test asserting it stays that way.
-      #
-      # The exception inside this file is the `atlas` job, which receives the Atlas service account
-      # and can create and delete clusters with it. Its actions are digest-pinned in place, because
-      # a moved tag there reaches a real credential. zizmor's ignore list is per file, so that
-      # pinning is a convention this comment records rather than something the ignore enforces.
-      #
-      # Digest-pinning the whole matrix would mean a Dependabot PR per action per bump across a dozen
-      # jobs, which is how pinning stops being read and starts being rubber-stamped.
-      - ci-python.yml
+# There is no `unpinned-uses` exception. Every action in every workflow is pinned to a commit digest,
+# and `tests/test_ci.py` asserts it. Dependabot's `actions` group moves the digests in one pull request.

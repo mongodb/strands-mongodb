@@ -856,11 +856,8 @@ class TestTheActionThatUploadsIsPinnedToContentRatherThanToAPlace:
     credential for ``strands-mongodb``, so whoever controls that branch controls what runs there and the
     blast radius is every install of this package.
 
-    **This is not a repository-wide pinning policy, and must not become one.** MongoDB's own zizmor
-    configuration is ``actions/*: ref-pin`` with ``mongodb-labs/drivers-github-tools/*: hash-pin``, so
-    ``actions/checkout@v7`` throughout these workflows is correct by that standard and moving it to
-    digests would be a deviation from it. PyMongo hash-pins this one action and ref-pins the rest. The
-    scope of this gate is therefore the job holding the credential, not the file.
+    The scope of this gate is the job holding the credential. Every other action in every workflow is
+    pinned to a digest too, and ``test_ci.py`` (``AT-244``) asserts that across the whole directory.
 
     **What a pin costs.** A digest does not update itself. Dependabot's ``github-actions`` updates keep it
     current, and the pin is worth less without them.

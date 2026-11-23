@@ -21,6 +21,7 @@ on:
       - '.github/workflows/release-python.yml'
       - '.github/dependabot.yml'
       - '.github/workflows/zizmor.yml'
+      - '.github/workflows/**'
       - '.github/zizmor.yml'
       - 'AGENTS.md'
       - 'CONTRIBUTING.md'
@@ -39,6 +40,7 @@ on:
       - '.github/workflows/release-python.yml'
       - '.github/dependabot.yml'
       - '.github/workflows/zizmor.yml'
+      - '.github/workflows/**'
       - '.github/zizmor.yml'
       - 'AGENTS.md'
       - 'CONTRIBUTING.md'
@@ -82,7 +84,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0
           # Otherwise `actions/checkout` leaves its token in `.git/config`, readable by every later step.
@@ -90,7 +92,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v7.1.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -131,13 +133,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v7.1.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
@@ -162,13 +164,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v7.1.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           # Quoted, as in the matrix. The oldest interpreter, because an old Python is what usually resolves
           # a user to the floors. A test compares this against `requires-python`.
@@ -260,13 +262,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v7.1.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: '3.13'
           cache: 'pip'
@@ -312,13 +314,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v7.1.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: '3.13'
           cache: 'pip'
@@ -356,13 +358,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v7.1.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -419,8 +421,8 @@ jobs:
       MONGODB_ATLAS_SKIP_UPDATE_CHECK: 'yes'
 
     steps:
-      # Digest-pinned, unlike the rest of this workflow: this is the one job that receives the Atlas
-      # service account, and `checkout` writes the workspace its credentialed steps run code from.
+      # This is the one job that receives the Atlas service account, and `checkout` writes the
+      # workspace its credentialed steps run code from. Every action in this workflow is digest-pinned.
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
