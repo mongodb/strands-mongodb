@@ -3,11 +3,6 @@
  *
  * @packageDocumentation
  */
-import { createRequire } from 'node:module'
-
-const require = createRequire(import.meta.url)
-const manifest = require('../package.json') as { version: string }
-
 export type {
   MongoDBAddResult,
   MongoDBConfig,
@@ -29,6 +24,5 @@ export {
   RESERVED_METADATA_KEYS,
   UNSCOPED,
 } from './types.js'
-
-/** The package version, read from `package.json`. */
-export const VERSION: string = manifest.version
+export { configureLogging } from './telemetry.js'
+export { VERSION } from './version.js'
