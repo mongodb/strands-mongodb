@@ -314,6 +314,9 @@ describe('TS-019 — the names match the Python package', () => {
   })
 })
 
+/** The two `LOG_EVENTS` names kept for parity with Python's list, which Node has no code path to emit. */
+const NEVER_EMITTED_IN_NODE: ReadonlySet<LogEvent> = new Set(['attribution_not_visible', 'closed_loop_client_dropped'])
+
 describe('TS-020 — every log record carries structured fields', () => {
   it('TS-020 — eventFields prefixes its keys and omits what does not apply', () => {
     expect(eventFields('tier_unavailable', { namespace: 'appdb.facts', tier: 'vector' })).toEqual({
@@ -328,7 +331,7 @@ describe('TS-020 — every log record carries structured fields', () => {
     })
   })
 
-  it('TS-020 — every log call in src/ passes eventFields(...) first, and names each event at most once', () => {
+  it('TS-020 — every log call in src/ passes eventFields(...) first, and emits each event exactly once', () => {
     const used: LogEvent[] = []
     const bare: string[] = []
     for (const [name, text] of sources()) {
@@ -342,7 +345,9 @@ describe('TS-020 — every log record carries structured fields', () => {
     expect(bare).toEqual([])
     expect(used.length).toBeGreaterThan(0)
     for (const name of used) expect(LOG_EVENTS).toContain(name)
-    expect(new Set(used).size).toBe(used.length)
+    // Python's two records about a client on another event loop have no Node counterpart: one thread, one loop.
+    const emitted = LOG_EVENTS.filter((name) => !NEVER_EMITTED_IN_NODE.has(name))
+    expect([...used].sort()).toEqual([...emitted].sort())
   })
 
   it('TS-020 — a fields object survives JSON, so a JSON logger indexes it without parsing the message', () => {

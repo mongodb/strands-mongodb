@@ -8,6 +8,8 @@
 import { readFileSync } from 'node:fs'
 
 import { StorageError } from '@strands-agents/sdk'
+import { BSON, MongoClient, ObjectId } from 'mongodb'
+import type { Document } from 'mongodb'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -21,6 +23,7 @@ import {
   successor,
 } from '../../src/keys.js'
 import type { VectorMode } from '../../src/indexes.js'
+import { memoryInternals, MongoDBMemoryStore } from '../../src/memory-store.js'
 import { hybridStages, textStages, vectorStages } from '../../src/pipeline.js'
 import { tokenize } from '../../src/tokenize.js'
 
@@ -37,6 +40,26 @@ interface Golden {
   encodedSize: { id: string; dataLength: number; expires: boolean; value: number }[]
   tokenize: { input: string; value: string[] }[]
   pipelines: { name: string; value: unknown[] }[]
+  contentHash: { input: string; value: string }[]
+  memoryAdd: MemoryAdd[]
+}
+
+/** One `add`, and the upsert Python's `add` sent for it. */
+interface MemoryAdd {
+  name: string
+  content: string
+  scope?: string
+  metadata?: Record<string, BSON.Document>
+  ttlSeconds?: number
+  embedder?: boolean
+  /** Canonical extended JSON, which names every BSON type. */
+  selector: Document
+  operator: string
+  keys: string[]
+  /** The inserted fields, less `created_at` and `expires_at`, which hold the clock. */
+  inserted: Document
+  createdAt: string
+  expiresAfterMs: number | null
 }
 
 const golden = JSON.parse(readFileSync(new URL('../fixtures/golden.json', import.meta.url), 'utf8')) as Golden
@@ -192,6 +215,67 @@ describe('TS-013 — the search pipelines match the Python package, key order in
 
   it('TS-013 — every TypeScript case has a Python vector', () => {
     expect([...PIPELINES.keys()].sort()).toEqual(golden.pipelines.map(({ name }) => name).sort())
+  })
+})
+
+/** The bag-of-words embedder `scripts/golden.py` uses. */
+const wordEmbedder = {
+  async embed(text: string): Promise<number[]> {
+    const words = text.toLowerCase().split(/\s+/)
+    return ['dark', 'mode', 'coffee', 'tea'].map((word) => 0.01 + words.filter((found) => found === word).length)
+  },
+}
+
+/** The one upsert the TypeScript `add` sends for `vector`, through a client that records it. */
+async function upsertFor(vector: MemoryAdd): Promise<[Document, Document]> {
+  const upserts: [Document, Document][] = []
+  const collection = {
+    async updateOne(selector: Document, update: Document): Promise<Document> {
+      upserts.push([selector, update])
+      return { upsertedId: new ObjectId() }
+    },
+  }
+  const client = { options: {}, appendMetadata: () => undefined, db: () => ({ collection: () => collection }) }
+  const store = new MongoDBMemoryStore({
+    name: 'facts',
+    writable: true,
+    ...(vector.scope === undefined ? {} : { scope: vector.scope }),
+    ...(vector.ttlSeconds === undefined ? {} : { ttlSeconds: vector.ttlSeconds }),
+    ...(vector.embedder === true ? { embedder: wordEmbedder } : {}),
+    config: {
+      database: 'agents',
+      client: client as unknown as MongoClient,
+      ...(vector.embedder === true ? { embeddingDimensions: 4, similarity: 'cosine' as const } : {}),
+    },
+  })
+  memoryInternals.prepare(store, [])
+  await store.add(vector.content, vector.metadata)
+  expect(upserts).toHaveLength(1)
+  return upserts[0] as [Document, Document]
+}
+
+/** `value` as canonical extended JSON, as `scripts/golden.py` writes it. */
+const canonical = (value: Document): Document => BSON.EJSON.serialize(value, { relaxed: false })
+
+describe('TS-013 — the memory document matches the Python package, BSON types included', () => {
+  it.each(golden.contentHash)('TS-013 — content_hash, case $#', ({ input, value }) => {
+    expect(memoryInternals.contentHash(input)).toBe(value)
+  })
+
+  it.each(golden.memoryAdd)('TS-013 — the upsert for the $name case', async (vector) => {
+    const [selector, update] = await upsertFor(vector)
+
+    expect(canonical(selector)).toEqual(vector.selector)
+    expect(Object.keys(update)).toEqual([vector.operator])
+    const inserted = { ...(update[vector.operator] as Document) }
+    expect(Object.keys(inserted)).toEqual(vector.keys)
+    const createdAt = inserted.created_at as Date
+    const expiresAt = inserted.expires_at as Date | undefined
+    delete inserted.created_at
+    delete inserted.expires_at
+    expect(canonical(inserted)).toEqual(vector.inserted)
+    expect(Object.keys(canonical({ createdAt }).createdAt as Document)).toEqual([vector.createdAt])
+    expect(expiresAt === undefined ? null : expiresAt.getTime() - createdAt.getTime()).toBe(vector.expiresAfterMs)
   })
 })
 

@@ -40,6 +40,44 @@ export interface Connection {
    * again. Only a collection that exists is added: an absent one can still be created with a collation.
    */
   readonly binaryKeys: Set<string>
+  /**
+   * What the deployment can run, from the capability probe, or `undefined` until it has run. On the
+   * connection so the probe runs once per deployment rather than once per store.
+   */
+  capabilities?: Capabilities
+  /** The tail of the chain {@link exclusive} queues setup on. Never rejects. */
+  setup: Promise<void>
+}
+
+/** What a deployment answered when the memory store probed it. */
+export interface Capabilities {
+  /** Whether the deployment runs Atlas Search, so search indexes can be listed and queried. */
+  readonly search: boolean
+  /** The server error code that said it does not, when it does not. */
+  readonly noSearchCode?: number
+  /** Whether the deployment runs `$rankFusion`, which the hybrid tier is built on. */
+  readonly rankFusion: boolean
+}
+
+/**
+ * Run `body` once every setup queued on `connection` before it has settled.
+ *
+ * The lock guarding one-time setup, such as index creation, against concurrent stores on one deployment. A
+ * promise chain rather than a mutex: Node has one thread, so the only interleaving is at an `await`, and
+ * queuing each body behind the last is the whole of what a lock has to do. A body that throws releases the
+ * chain all the same.
+ *
+ * @param connection - The shared connection.
+ * @param body - The setup to run alone.
+ * @returns What `body` returns.
+ */
+export function exclusive<T>(connection: Connection, body: () => Promise<T>): Promise<T> {
+  const result = connection.setup.then(body)
+  connection.setup = result.then(
+    () => undefined,
+    () => undefined,
+  )
+  return result
 }
 
 /**
@@ -104,13 +142,13 @@ export function resolve(config: MongoDBConfig, owner: Owner): Connection {
       config.client.appendMetadata({ name: DRIVER_NAME, version: VERSION })
       ATTRIBUTED.add(config.client)
     }
-    return register(key, { client: config.client, owned: false, binaryKeys: new Set() })
+    return register(key, { client: config.client, owned: false, binaryKeys: new Set(), setup: Promise.resolve() })
   }
   const client = new MongoClient(config.connectionString as string, {
     ...config.clientOptions,
     driverInfo: { name: DRIVER_NAME, version: VERSION },
   })
-  return register(key, { client, owned: true, binaryKeys: new Set() })
+  return register(key, { client, owned: true, binaryKeys: new Set(), setup: Promise.resolve() })
 }
 
 /**

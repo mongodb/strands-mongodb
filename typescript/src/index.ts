@@ -24,6 +24,7 @@ export {
   RESERVED_METADATA_KEYS,
   UNSCOPED,
 } from './types.js'
+export { MongoDBMemoryStore } from './memory-store.js'
 export { MongoDBStorage } from './storage.js'
 export { DEFAULT_STORAGE_VECTOR_INDEX_NAME, MongoDBVectorSearchStrategy } from './vector-search.js'
 export type { MongoDBVectorSearchStrategyOptions } from './vector-search.js'

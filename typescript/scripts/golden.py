@@ -16,14 +16,18 @@ the search pipelines with milestone 8, and the document shapes and ``content_has
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+
+from bson import ObjectId, json_util
 
 from strands.storage.search.keyword import tokenize
 from strands.storage.storage import _normalize_key, _normalize_prefix
 
-from strands_mongodb import MongoDBStorage
+from strands_mongodb import MongoDBMemoryStore, MongoDBStorage
 from strands_mongodb._indexes import VectorMode
 from strands_mongodb._pipeline import hybrid_stages, text_stages, vector_stages
 from strands_mongodb.storage import _abbreviate, _encoded_size, _successor
@@ -133,6 +137,93 @@ PIPELINES: list[tuple[str, Any]] = [
 ]
 
 
+CONTENT_HASHES = ["", "the user prefers dark mode", "ké 日本語 \U0001f600", "tab\tnew\nline"]
+
+# One case per optional field of the inserted document, so a missing, extra or retyped field fails one case.
+MEMORY_ADDS: list[dict[str, Any]] = [
+    {"name": "plain", "scope": "tenant-a", "content": "the user prefers dark mode"},
+    {"name": "unscoped", "content": "a fact from a store nobody scoped"},
+    {
+        "name": "metadata",
+        "scope": "tenant-a",
+        "content": "the user works in emea",
+        "metadata": {"source": "chat", "scope": "tenant-b", "n": 1, "ratio": 0.5, "nested": {"a": [1, "b"]}},
+    },
+    {"name": "ttl 0", "scope": "tenant-a", "content": "forget me", "ttlSeconds": 0},
+    {"name": "ttl 60", "scope": "tenant-a", "content": "forget me later", "ttlSeconds": 60},
+    {"name": "embedder", "scope": "tenant-a", "content": "dark mode dark", "embedder": True},
+]
+
+
+class _WordEmbedder:
+    """Four dimensions over ``dark``, ``mode``, ``coffee`` and ``tea``: the test suites' bag-of-words embedder."""
+
+    async def embed(self, text: str) -> list[float]:
+        words = text.lower().split()
+        return [0.01 + words.count(word) for word in ("dark", "mode", "coffee", "tea")]
+
+
+class _RecordingCollection:
+    """Records the one ``update_one`` an ``add`` makes and reports an insert."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[dict[str, Any], dict[str, Any]]] = []
+
+    async def update_one(self, selector: dict[str, Any], update: dict[str, Any], upsert: bool) -> Any:
+        assert upsert
+        self.calls.append((selector, update))
+        return SimpleNamespace(upserted_id=ObjectId("0123456789abcdef01234567"))
+
+
+def canonical(value: Any) -> Any:
+    """``value`` as canonical extended JSON, which names every BSON type: a double is not an int here."""
+    return json.loads(json_util.dumps(value, json_options=json_util.CANONICAL_JSON_OPTIONS))
+
+
+async def memory_adds() -> list[dict[str, Any]]:
+    """The upsert each ``add`` sends, through the real ``add``, with the clock-dependent fields reduced."""
+    cases = []
+    for case in MEMORY_ADDS:
+        config: dict[str, Any] = {"database": "agents", "connection_string": "mongodb://localhost:27017"}
+        options: dict[str, Any] = {"name": "facts", "writable": True, "config": config}
+        if "scope" in case:
+            options["scope"] = case["scope"]
+        if "ttlSeconds" in case:
+            options["ttl_seconds"] = case["ttlSeconds"]
+        if case.get("embedder"):
+            config.update(embedding_dimensions=4, similarity="cosine")
+            options["embedder"] = _WordEmbedder()
+        store = MongoDBMemoryStore(**options)
+        recorder = _RecordingCollection()
+
+        async def initialized() -> None:
+            return None
+
+        store.initialize = initialized  # type: ignore[method-assign]
+        store._collection = lambda recorder=recorder: recorder  # type: ignore[method-assign]
+        await store.add(case["content"], metadata=case.get("metadata"))
+        await store.close()
+        [(selector, update)] = recorder.calls
+        [operator] = update
+        inserted = dict(update[operator])
+        created_at = inserted.pop("created_at")
+        expires_at = inserted.pop("expires_at", None)
+        cases.append(
+            {
+                **case,
+                "selector": canonical(selector),
+                "operator": operator,
+                "keys": list(update[operator]),
+                "inserted": canonical(inserted),
+                "createdAt": next(iter(canonical(created_at))),
+                "expiresAfterMs": None
+                if expires_at is None
+                else round((expires_at - created_at).total_seconds() * 1000),
+            }
+        )
+    return cases
+
+
 def outcome(run: Any) -> dict[str, Any]:
     """The value ``run`` returns, or the message of the error it raises."""
     try:
@@ -197,6 +288,10 @@ def main() -> None:
         ],
         "tokenize": [{"input": text, "value": sorted(tokenize(text))} for text in TOKENIZE],
         "pipelines": [{"name": name, "value": build()} for name, build in PIPELINES],
+        "contentHash": [
+            {"input": text, "value": hashlib.sha256(text.encode("utf-8")).hexdigest()} for text in CONTENT_HASHES
+        ],
+        "memoryAdd": asyncio.run(memory_adds()),
     }
     OUTPUT.parent.mkdir(exist_ok=True)
     OUTPUT.write_text(json.dumps(golden, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

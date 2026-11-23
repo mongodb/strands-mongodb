@@ -842,5 +842,195 @@
         }
       ]
     }
+  ],
+  "contentHash": [
+    {
+      "input": "",
+      "value": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "input": "the user prefers dark mode",
+      "value": "b529ba9ef2cae5efd36ee0f48a0ef3f905ce9e22f4689f932100da0d294ace7d"
+    },
+    {
+      "input": "ké 日本語 😀",
+      "value": "3b7917f8e7f84a3ea4e9b6cca67abb26e1ba572914a5b4e2d7ce464ba357c65a"
+    },
+    {
+      "input": "tab\tnew\nline",
+      "value": "9cfb661b36d8675a701c11e57b310d7fb68345a8b2a33f6e10572397f2e0d498"
+    }
+  ],
+  "memoryAdd": [
+    {
+      "name": "plain",
+      "scope": "tenant-a",
+      "content": "the user prefers dark mode",
+      "selector": {
+        "scope": "tenant-a",
+        "store_name": "facts",
+        "content_hash": "b529ba9ef2cae5efd36ee0f48a0ef3f905ce9e22f4689f932100da0d294ace7d"
+      },
+      "operator": "$setOnInsert",
+      "keys": [
+        "content",
+        "created_at"
+      ],
+      "inserted": {
+        "content": "the user prefers dark mode"
+      },
+      "createdAt": "$date",
+      "expiresAfterMs": null
+    },
+    {
+      "name": "unscoped",
+      "content": "a fact from a store nobody scoped",
+      "selector": {
+        "scope": "__unscoped__",
+        "store_name": "facts",
+        "content_hash": "509e9d95f5cca2e3185e1b376a725bbfe1e6c394fe7723ee7f6ad419e4630b58"
+      },
+      "operator": "$setOnInsert",
+      "keys": [
+        "content",
+        "created_at"
+      ],
+      "inserted": {
+        "content": "a fact from a store nobody scoped"
+      },
+      "createdAt": "$date",
+      "expiresAfterMs": null
+    },
+    {
+      "name": "metadata",
+      "scope": "tenant-a",
+      "content": "the user works in emea",
+      "metadata": {
+        "source": "chat",
+        "scope": "tenant-b",
+        "n": 1,
+        "ratio": 0.5,
+        "nested": {
+          "a": [
+            1,
+            "b"
+          ]
+        }
+      },
+      "selector": {
+        "scope": "tenant-a",
+        "store_name": "facts",
+        "content_hash": "c4021753839bae9b8c75bc8d00d10ee6ee3ba5bdbb2f2169c84539881477de35"
+      },
+      "operator": "$setOnInsert",
+      "keys": [
+        "content",
+        "created_at",
+        "metadata"
+      ],
+      "inserted": {
+        "content": "the user works in emea",
+        "metadata": {
+          "source": "chat",
+          "scope": "tenant-b",
+          "n": {
+            "$numberInt": "1"
+          },
+          "ratio": {
+            "$numberDouble": "0.5"
+          },
+          "nested": {
+            "a": [
+              {
+                "$numberInt": "1"
+              },
+              "b"
+            ]
+          }
+        }
+      },
+      "createdAt": "$date",
+      "expiresAfterMs": null
+    },
+    {
+      "name": "ttl 0",
+      "scope": "tenant-a",
+      "content": "forget me",
+      "ttlSeconds": 0,
+      "selector": {
+        "scope": "tenant-a",
+        "store_name": "facts",
+        "content_hash": "448443d302b4ba326630fb0332ceed39744f5632fc9bf6cdfbe16f69e6568a73"
+      },
+      "operator": "$setOnInsert",
+      "keys": [
+        "content",
+        "created_at",
+        "expires_at"
+      ],
+      "inserted": {
+        "content": "forget me"
+      },
+      "createdAt": "$date",
+      "expiresAfterMs": 0
+    },
+    {
+      "name": "ttl 60",
+      "scope": "tenant-a",
+      "content": "forget me later",
+      "ttlSeconds": 60,
+      "selector": {
+        "scope": "tenant-a",
+        "store_name": "facts",
+        "content_hash": "aaa18851bb376997bc6449f8da0bc64a8e011fb8f47b8f6df38f1171c6983410"
+      },
+      "operator": "$setOnInsert",
+      "keys": [
+        "content",
+        "created_at",
+        "expires_at"
+      ],
+      "inserted": {
+        "content": "forget me later"
+      },
+      "createdAt": "$date",
+      "expiresAfterMs": 60000
+    },
+    {
+      "name": "embedder",
+      "scope": "tenant-a",
+      "content": "dark mode dark",
+      "embedder": true,
+      "selector": {
+        "scope": "tenant-a",
+        "store_name": "facts",
+        "content_hash": "9a6a880a378def1e5b3f737bd03376a81b0020dfe516a12cb20a7854f43fa38b"
+      },
+      "operator": "$setOnInsert",
+      "keys": [
+        "content",
+        "created_at",
+        "embedding"
+      ],
+      "inserted": {
+        "content": "dark mode dark",
+        "embedding": [
+          {
+            "$numberDouble": "2.01"
+          },
+          {
+            "$numberDouble": "1.01"
+          },
+          {
+            "$numberDouble": "0.01"
+          },
+          {
+            "$numberDouble": "0.01"
+          }
+        ]
+      },
+      "createdAt": "$date",
+      "expiresAfterMs": null
+    }
   ]
 }
