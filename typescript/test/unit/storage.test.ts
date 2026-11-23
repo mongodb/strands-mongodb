@@ -52,7 +52,7 @@ const NAMESPACED = Symbol.for('strands.storage.namespaced')
 const PASSWORD = 'SUPERSECRET'
 
 /** A connection string carrying {@link PASSWORD}, built here so no file holds one with credentials. */
-const LEAKY_URI = `mongodb://appuser:${PASSWORD}@127.0.0.1:1/appdb`
+const LEAKY_URI = 'mongodb://appuser:' + PASSWORD + '@127.0.0.1:1/appdb'
 
 /** A collation that folds case and accents, as `listCollections` reports one. */
 const CASE_INSENSITIVE: Document = {

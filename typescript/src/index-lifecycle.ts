@@ -108,12 +108,14 @@ export function searchSupport(collection: Collection): Promise<SearchSupport> {
  * Unlike {@link searchSupport} this reads `buildInfo`, because `$rankFusion` is a `mongod` stage and
  * `mongod`'s version decides it. `versionArray` avoids parsing suffixes such as `-rc1`.
  *
- * Every failure reads as `false`. The answer only picks between two working search tiers, so a wrong
+ * Every server failure reads as `false`. The answer only picks between two working search tiers, so a wrong
  * `false` costs ranking quality while a wrong `true` makes every search fail.
  *
  * @param db - The database to send `buildInfo` to.
  * @param collection - The collection the probe is for, which the span names. Need not exist.
  * @returns `true` if the server reports major version `RANK_FUSION_MIN_MAJOR` or later.
+ * @throws Error when the command fails with anything other than a `MongoError`, which is a fault in the
+ *   caller or the process rather than an answer from the server, and is rethrown unchanged.
  */
 export function rankFusionSupport(db: Db, collection: Collection): Promise<boolean> {
   return span('strands_mongodb.indexes.probe', probeAttributes(collection, 'rank_fusion'), async () => {

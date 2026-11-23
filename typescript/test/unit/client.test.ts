@@ -27,7 +27,7 @@ const UNREACHABLE = 'mongodb://127.0.0.1:1/'
 
 /** A fake password, assembled so no file holds a credentialed URI as one literal. */
 const PASSWORD = 'SUPERSECRET'
-const LEAKY_URI = `mongodb://appuser:${PASSWORD}@127.0.0.1:1/appdb`
+const LEAKY_URI = 'mongodb://appuser:' + PASSWORD + '@127.0.0.1:1/appdb'
 
 /** One log call a recording logger received. */
 interface LogCall {

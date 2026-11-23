@@ -18,7 +18,14 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
-      thresholds: { statements: 90, branches: 90, functions: 90, lines: 90 },
+      // 90 across the package, and no file below 70, matching the Python suite's two floors.
+      thresholds: {
+        statements: 90,
+        branches: 90,
+        functions: 90,
+        lines: 90,
+        perFile: { statements: 70, branches: 70, functions: 70, lines: 70 },
+      },
     },
   },
 })

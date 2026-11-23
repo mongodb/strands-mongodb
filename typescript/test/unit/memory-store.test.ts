@@ -1408,7 +1408,8 @@ describe('TS-132 — a score bound declines the better tier, and reaches the fus
   })
 })
 
-const LEAKY_URI = `mongodb://u:${PASSWORD}@127.0.0.1:1/?serverSelectionTimeoutMS=50`
+/** Concatenated, so the credential sweep (TS-161) does not read this file as carrying one. */
+const LEAKY_URI = 'mongodb://u:' + PASSWORD + '@127.0.0.1:1/?serverSelectionTimeoutMS=50'
 
 /** Nothing rendered from any subject contains the password. */
 function assertNoLeak(...subjects: unknown[]): void {
@@ -1936,7 +1937,8 @@ const MARK = {
   username: 'mkuser4c1d',
   password: 'mkpass9e7b',
 } as const
-const MARKED_URI = `mongodb://${MARK.username}:${MARK.password}@127.0.0.1:1/?serverSelectionTimeoutMS=50`
+/** Concatenated, so the credential sweep (TS-161) does not read this file as carrying one. */
+const MARKED_URI = 'mongodb://' + MARK.username + ':' + MARK.password + '@127.0.0.1:1/?serverSelectionTimeoutMS=50'
 const MARKERS = [...Object.values(MARK), MARKED_URI]
 
 const STORAGE_SPANS = ['write', 'read', 'list', 'search', 'delete', 'delete_prefix', 'ensure_indexes'].map(

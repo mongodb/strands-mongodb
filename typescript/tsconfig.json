@@ -14,7 +14,9 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "types": ["node"],
-    "noEmit": true
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "paths": { "strands-mongodb": ["./src/index.ts"] }
   },
   "include": ["src", "test", "scripts", "examples", "vitest.config.ts", "eslint.config.js"]
 }
