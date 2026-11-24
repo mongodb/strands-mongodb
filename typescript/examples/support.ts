@@ -17,9 +17,6 @@ import type { MongoDBConfig } from 'strands-mongodb'
 /** The environment variable both examples read the connection string from. */
 export const URI_VARIABLE = 'MONGODB_URI'
 
-/** Everything between the scheme and the host, which is where a password sits. */
-const CREDENTIALS = /:\/\/[^@/]+@/
-
 let line = 0
 
 /**
@@ -41,11 +38,15 @@ export function say(message: string): void {
  * Return `uri` with any credentials replaced.
  *
  * @param uri - A MongoDB connection string.
- * @returns The same string with everything between `://` and `@` replaced by `<redacted>`. A URI with no
- *   credentials comes back unchanged.
+ * @returns The same string with everything between `://` and the last `@` replaced by `<redacted>`. The last
+ *   one, because a password pasted without percent-encoding can hold `/` and `@` itself. A URI with no `@`
+ *   comes back unchanged.
  */
 export function redact(uri: string): string {
-  return uri.replace(CREDENTIALS, '://<redacted>@')
+  const scheme = uri.indexOf('://')
+  const at = uri.lastIndexOf('@')
+  if (scheme === -1 || at < scheme) return uri
+  return `${uri.slice(0, scheme)}://<redacted>${uri.slice(at)}`
 }
 
 /**

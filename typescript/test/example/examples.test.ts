@@ -21,7 +21,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 
 import { beforeAll, describe, expect, it } from 'vitest'
 
-import { CREDENTIALED_URI } from '../support/credentials.js'
+import { CREDENTIALED_URI, uriPasswords } from '../support/credentials.js'
 import { useDeployment, uniqueName } from '../support/deployment.js'
 import { PACKAGE_ROOT } from '../support/program.js'
 import { describeTier, tierValue } from '../support/tiers.js'
@@ -68,8 +68,9 @@ function summary(run: Run): Record<string, unknown> {
 function expectNoCredentials(run: Run, uri?: string): void {
   const output = bothStreams(run)
   expect(CREDENTIALED_URI.test(output), `a credentialed URI reached the output\n${output}`).toBe(false)
-  const password = uri === undefined ? undefined : /:\/\/[^:@/]+:([^@]+)@/.exec(uri)?.[1]
-  if (password !== undefined) expect(output.includes(password), 'the URI password reached the output').toBe(false)
+  for (const password of uri === undefined ? [] : uriPasswords(uri)) {
+    expect(output.includes(password), 'the URI password reached the output').toBe(false)
+  }
 }
 
 /**

@@ -17,7 +17,7 @@ import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { CREDENTIALED_URI } from '../support/credentials.js'
+import { CREDENTIALED_URI, uriPasswords } from '../support/credentials.js'
 import { PACKAGE_ROOT } from '../support/program.js'
 
 /** The child that drives `ScriptedModel`: one text reply, one tool-use reply, then a third call that must throw. */
@@ -70,7 +70,41 @@ const GUARD_CASES: [string, boolean][] = [
   ['connecting to mongodb+srv://' + 'appuser:s3cret' + '@cluster.example.mongodb.net/', true],
   ['connecting to mongodb+srv://' + 'appuser:<redacted>' + '@cluster.example.mongodb.net/', true],
   ['connecting to mongodb+srv://' + '<redacted>:pw' + '@cluster.example.mongodb.net/', true],
+  ['connecting to mongodb+srv://' + 'appuser:pa/ss' + '@cluster.example.mongodb.net/', true],
+  ['connecting to mongodb://' + 'appuser:p@ss' + '@127.0.0.1:27017/', true],
+  ['connecting to mongodb://' + '<redacted>@ss' + '@127.0.0.1:27017/', true],
+  ['connecting to mongodb://' + 'appuser:p?ss' + '@127.0.0.1:27017/', true],
   ['connecting to mongodb+srv://cluster.example.mongodb.net/', false],
+]
+
+/** The child that redacts each argument. Run apart from the suite for the reason `SCRIPTED_MODEL_EVENTS` is. */
+const REDACT_EACH_ARGUMENT = `
+import { redact } from './examples/support.ts'
+
+console.log(JSON.stringify(process.argv.slice(1).map(redact)))
+`
+
+/**
+ * A URI and the redaction of it. A password is percent-encoded in a valid URI, so a `/` or `@` inside one means
+ * it was pasted raw: the URI the driver rejects, which the scripts print redacted before the driver sees it.
+ */
+const REDACTIONS: [string, string][] = [
+  [
+    'mongodb+srv://' + 'appuser:s3cret' + '@cluster.example.mongodb.net/?appName=demo',
+    'mongodb+srv://<redacted>@cluster.example.mongodb.net/?appName=demo',
+  ],
+  [
+    'mongodb+srv://' + 'appuser:pa/ss' + '@cluster.example.mongodb.net/',
+    'mongodb+srv://<redacted>@cluster.example.mongodb.net/',
+  ],
+  ['mongodb://' + 'appuser:p@ss' + '@127.0.0.1:27017/', 'mongodb://<redacted>@127.0.0.1:27017/'],
+  ['mongodb://127.0.0.1:27017/?directConnection=true', 'mongodb://127.0.0.1:27017/?directConnection=true'],
+]
+
+/** A URI, and output that prints its password without the URI around it. */
+const BARE_PASSWORDS: [string, string][] = [
+  ['mongodb://' + 'appuser:s3cret' + '@localhost:27017/?appName=demo@example', 'the password is s3cret'],
+  ['mongodb://' + 'appuser:p@ss' + '@127.0.0.1:27017/', 'the password is p@ss'],
 ]
 
 interface ChildPayload {
@@ -108,6 +142,26 @@ describe('TS-169 — the credential guard, the redaction it permits, and the fil
     expect(redacted).toBe('mongodb+srv://<redacted>@cluster.example.mongodb.net/')
     expect(CREDENTIALED_URI.test(redacted)).toBe(false)
   }, 30_000)
+
+  it('TS-169 — redact() replaces everything up to the last @, and leaves a URI without one alone', () => {
+    const stdout = execFileSync(
+      process.execPath,
+      ['--input-type=module', '-e', REDACT_EACH_ARGUMENT, ...REDACTIONS.map(([uri]) => uri)],
+      { cwd: PACKAGE_ROOT, encoding: 'utf8' },
+    )
+    const redacted = JSON.parse(stdout.trim().split('\n').at(-1) ?? '[]') as string[]
+    expect(redacted).toEqual(REDACTIONS.map(([, expected]) => expected))
+    expect(redacted.some((line) => CREDENTIALED_URI.test(line))).toBe(false)
+  }, 30_000)
+
+  // An `@` in the query string makes the userinfo ambiguous, so the password is read both ways. Reading only
+  // up to the last `@` anywhere would widen it past the bare secret, which would then slip through.
+  it.each(BARE_PASSWORDS)(
+    'TS-169 — the password check sees the password of %s printed without its URI',
+    (uri, printed) => {
+      expect(uriPasswords(uri).some((password) => printed.includes(password))).toBe(true)
+    },
+  )
 
   it('TS-169 — examples/ is typechecked, and stays out of the published tarball', () => {
     const tsconfig = JSON.parse(readFileSync(join(PACKAGE_ROOT, 'tsconfig.json'), 'utf8')) as { include: string[] }
