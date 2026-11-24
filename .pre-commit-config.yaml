@@ -70,3 +70,31 @@ repos:
         language: system
         files: ^python/.*\.py$
         pass_filenames: false
+
+  # The `Lint` job in .github/workflows/ci-typescript.yml, in its order, run with the project's own
+  # Prettier, ESLint and TypeScript from typescript/node_modules: run `npm ci` in typescript/ first.
+  # `pass_filenames: false` for the reason given above: each tool reads its own file list from the
+  # package's configuration, and a path argument would check a different set than CI does.
+  # typescript/test/unit/ci.test.ts asserts each hook runs the command its job step runs.
+  - repo: local
+    hooks:
+      - id: typescript-format-check
+        name: prettier --check (typescript/)
+        entry: npm --prefix typescript run format:check
+        language: system
+        files: ^typescript/
+        pass_filenames: false
+
+      - id: typescript-lint
+        name: eslint (typescript/)
+        entry: npm --prefix typescript run lint
+        language: system
+        files: ^typescript/
+        pass_filenames: false
+
+      - id: typescript-typecheck
+        name: tsc --noEmit (typescript/)
+        entry: npm --prefix typescript run typecheck
+        language: system
+        files: ^typescript/
+        pass_filenames: false

@@ -16,6 +16,14 @@ rules:
       # The release workflow is the opposite case, and is digest-pinned throughout. A test asserts
       # that every action in a job holding `id-token: write` is pinned to a 40-character digest.
       - ci-python.yml
+      # The same two server images, as the TypeScript workflow's contract matrix.
+      #
+      # The argument above holds unchanged: the containers are throwaway fixtures that hold no credential,
+      # receive no secret and feed nothing into a release, and the point of the matrix is to test against
+      # the server a user would install today. The two workflows track the same images on purpose, so a
+      # digest pinned in one would leave them testing against different servers. The actions in that file
+      # are digest-pinned, so it needs no `unpinned-uses` entry below.
+      - ci-typescript.yml
   unpinned-uses:
     ignore:
       # The integration matrix's actions, referenced by version tag rather than commit digest.

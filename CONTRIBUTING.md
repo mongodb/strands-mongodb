@@ -12,7 +12,9 @@ layout. It also lists what not to do, which is the shorter and more useful list.
 Search the existing issues first, including closed ones. When you open a new one, include:
 
 - A reproducible test case or a sequence of steps.
-- The version of this package, of `strands-agents`, and of Python.
+- The version of this package, and which one: Python or TypeScript. For Python, the versions of
+  `strands-agents` and of Python. For TypeScript, the versions of `@strands-agents/sdk`, of `mongodb` and of
+  Node.js.
 - Which MongoDB deployment you are on: Atlas, an Atlas CLI local deployment, or a self-managed server, and
   its version. Behaviour differs across the three, and the search tiers differ most.
 - Anything unusual about the environment, and whether you have already tried the latest release.
@@ -54,6 +56,20 @@ python -m pytest
 
 Either way, every command runs from `python/`, not from the repository root.
 
+### TypeScript
+
+You need Node.js 22 or newer and npm 11.21.3 or newer. Older npm 11 releases leave a native binding out of a
+clean install, and the test runner then cannot start.
+
+```bash
+cd strands-mongodb/typescript
+npm ci
+npm run check
+```
+
+Every TypeScript command runs from `typescript/`, and `npm run check` is the counterpart of
+`hatch run prepare`. [`typescript/README.md`](typescript/README.md#development) lists the rest.
+
 ## Running the tests
 
 Most of the suite needs no deployment at all. The tiers that need one are gated on an environment
@@ -75,6 +91,10 @@ Because `.env` is loaded automatically, a bare test run on a machine that has on
 `AGENTS.md` explains how to opt out, and how long an index build and an embedding can take, which is worth
 reading before you conclude that a cluster test has hung.
 
+The TypeScript suite has the same tiers apart from `compat`, gated on the same variables, so one deployment
+serves both. It reads them from the environment and from a `.env` file in `typescript/`, and its `npm test`
+runs every tier whose variable is set.
+
 ## What a pull request has to pass
 
 Run this before pushing. It is the same four checks the first two CI jobs run, in the same order, except
@@ -92,6 +112,9 @@ formatting or typing defect is caught before the commit exists rather than on th
 pip install pre-commit
 pre-commit install
 ```
+
+Three more hooks do the same for TypeScript, calling `npm run format:check`, `npm run lint` and
+`npm run typecheck` in `typescript/` when a commit touches it. They need its dependencies installed.
 
 This is a local convenience and never the authority. A clone without it commits exactly as before, and
 CI stays the thing that decides, which is why none of the hooks is a relaxed version of the CI check.
@@ -121,6 +144,13 @@ the weekly cron and when a maintainer starts the workflow by hand, never on a pu
 secret, and every run is billed for the hour or so its cluster exists. A pull request that changes automated
 embedding should say whether the author ran `autoembed` locally.
 
+A change under `typescript/` runs `.github/workflows/ci-typescript.yml` instead: lint and typecheck, the
+unit tier on Node.js 22 and 24, the contract, integration and example tiers against the same two
+service containers, and the coverage floors with the build tier. The job table is in
+[`typescript/README.md`](typescript/README.md#continuous-integration), where a test holds it to the workflow.
+None of those jobs holds a secret. Nothing in that workflow runs `autoembed` yet, so a TypeScript change to
+automated embedding should say whether the author ran that tier locally.
+
 ### The cluster the `Atlas tiers` job creates
 
 The job runs [`python/scripts/atlas_ci_cluster.py`](python/scripts/atlas_ci_cluster.py), which you can also
@@ -141,9 +171,10 @@ workflow reads three repository secrets:
 
 1. Work against `main` and keep the change focused on one thing.
 2. **Add or update a test** that fails without your change.
-3. **Update the documentation if behaviour changed.** `python/README.md` is the reference a user reads.
+3. **Update the documentation if behaviour changed.** `python/README.md` and `typescript/README.md` are the
+   references a user reads.
 4. Use a conventional commit subject: `feat:`, `fix:`, `docs:`, `test:`, `refactor:` or `chore:`.
-5. Run `hatch run prepare` and make sure it is clean.
+5. Run `hatch run prepare`, or `npm run check` for a TypeScript change, and make sure it is clean.
 6. Open the pull request against `main`, describe what changed and why, and mention any issue it closes.
 7. Stay engaged with review. Squash and rebase if asked.
 

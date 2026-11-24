@@ -43,6 +43,9 @@ enforces each one, how to erase stored memories, the index and privilege handoff
 spans and log fields it emits, and the limits this package does not remove. This page stays short so that
 each fact lives in one place.
 
+[`typescript/README.md`](typescript/README.md) is the same reference for the TypeScript package, which
+writes the same documents and creates the same indexes, so one collection can serve agents in both languages.
+
 [`python/MIGRATION.md`](python/MIGRATION.md) is for readers arriving from one of the three MongoDB
 backends that already exist for Strands: the archived `mongodb_memory` tool in `strands-agents-tools`,
 and the community `strands-mongodb-store` and `strands-mongodb-storage` packages. One of the three
@@ -59,14 +62,18 @@ you run as separate processes, so the only thing that carries state between them
 
 Python 3.10 or newer. [`python/README.md`](python/README.md#requirements) lists the dependency floors and what each MongoDB deployment can serve.
 
+Node.js 22 or newer for the TypeScript package. [`typescript/README.md`](typescript/README.md#requirements) lists its peer dependencies.
+
 ## Repository layout
 
 | Directory | Package | Publishes to |
 |---|---|---|
 | `python/` | `strands-mongodb` | PyPI |
+| `typescript/` | `strands-mongodb` | npm |
 
-A `typescript/` sibling publishing the same name to npm may follow. The layout reserves room for it so
-it can be added without moving files.
+The two share a name and an on-disk format, so a collection written by one is read by the other.
+[Sharing a collection with Python](typescript/README.md#sharing-a-collection-with-python) covers the one
+difference you can see in the data. No release workflow publishes the TypeScript package yet.
 
 ## Contributing
 
